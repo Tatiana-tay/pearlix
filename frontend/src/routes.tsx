@@ -1,0 +1,35 @@
+export const routes = {
+  auth: {
+    login: "/login",
+    forgotPassword: "/forgot-password",
+    resetPassword: "/reset-password",
+  },
+  admin: {
+    dashboard: "/admin/dashboard",
+    users: "/admin/users",
+    doctorsStaff: "/admin/doctors-staff",
+    appointments: "/admin/appointments",
+    patients: "/admin/patients",
+    billing: "/admin/billing",
+    settings: "/admin/settings",
+  },
+  staff: {
+    dashboard: "/staff/dashboard",
+    appointments: "/staff/appointments",
+    patients: "/staff/patients",
+    billing: "/staff/billing",
+    doctorsStaff: "/staff/doctors-staff",
+    profile: "/staff/profile",
+    settings: "/staff/settings",
+  },
+  doctor: {
+    dashboard: "/doctor/dashboard",
+    appointments: "/doctor/appointments",
+    patients: "/doctor/patients",
+    profile: "/doctor/profile",
+    myAppointments: "/doctor/my-appointments",
+    patientRecords: "/doctor/patient-records",
+    activeVisit: "/doctor/active-visit",
+    settings: "/doctor/settings",
+  },
+};
