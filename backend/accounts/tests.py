@@ -1,9 +1,24 @@
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APITestCase
+from types import SimpleNamespace
+
+from .permissions import (
+    IsActiveUser,
+    IsAdminOrStaff,
+    IsAdminRole,
+    IsDoctorRole,
+    IsStaffOrDoctor,
+    IsStaffRole,
+    is_active_user,
+    is_admin,
+    is_doctor,
+    is_staff_role,
+)
 
 
 class UserModelTests(TestCase):
@@ -174,3 +189,108 @@ class AuthEndpointTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data["ok"])
+
+
+class RolePermissionTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.admin = User.objects.create_user(
+            username="admin-role@example.com",
+            email="admin-role@example.com",
+            password="test-pass-123",
+            full_name="Admin Role",
+            role=User.Role.ADMIN,
+            status=User.Status.ACTIVE,
+            is_staff=True,
+        )
+        self.staff = User.objects.create_user(
+            username="staff-role@example.com",
+            email="staff-role@example.com",
+            password="test-pass-123",
+            full_name="Staff Role",
+            role=User.Role.STAFF,
+            status=User.Status.ACTIVE,
+        )
+        self.doctor = User.objects.create_user(
+            username="doctor-role@example.com",
+            email="doctor-role@example.com",
+            password="test-pass-123",
+            full_name="Doctor Role",
+            role=User.Role.DOCTOR,
+            status=User.Status.ACTIVE,
+        )
+        self.inactive = User.objects.create_user(
+            username="inactive-role@example.com",
+            email="inactive-role@example.com",
+            password="test-pass-123",
+            full_name="Inactive Role",
+            role=User.Role.STAFF,
+            status=User.Status.INACTIVE,
+            is_active=False,
+        )
+        self.django_staff_doctor = User.objects.create_user(
+            username="django-staff-doctor@example.com",
+            email="django-staff-doctor@example.com",
+            password="test-pass-123",
+            full_name="Django Staff Doctor",
+            role=User.Role.DOCTOR,
+            status=User.Status.ACTIVE,
+            is_staff=True,
+        )
+
+    def allows(self, permission_class, user):
+        request = SimpleNamespace(user=user)
+        return permission_class().has_permission(request, view=None)
+
+    def test_anonymous_user_fails_role_permission_checks(self):
+        anonymous = AnonymousUser()
+
+        self.assertFalse(self.allows(IsAdminRole, anonymous))
+        self.assertFalse(self.allows(IsStaffRole, anonymous))
+        self.assertFalse(self.allows(IsDoctorRole, anonymous))
+        self.assertFalse(self.allows(IsAdminOrStaff, anonymous))
+        self.assertFalse(self.allows(IsStaffOrDoctor, anonymous))
+
+    def test_inactive_user_fails_active_user_permission_checks(self):
+        self.assertFalse(is_active_user(self.inactive))
+        self.assertFalse(self.allows(IsActiveUser, self.inactive))
+        self.assertFalse(self.allows(IsStaffRole, self.inactive))
+
+    def test_admin_passes_admin_permission(self):
+        self.assertTrue(is_admin(self.admin))
+        self.assertTrue(self.allows(IsAdminRole, self.admin))
+
+    def test_staff_role_passes_staff_permission(self):
+        self.assertTrue(is_staff_role(self.staff))
+        self.assertTrue(self.allows(IsStaffRole, self.staff))
+
+    def test_doctor_role_passes_doctor_permission(self):
+        self.assertTrue(is_doctor(self.doctor))
+        self.assertTrue(self.allows(IsDoctorRole, self.doctor))
+
+    def test_staff_does_not_pass_admin_permission(self):
+        self.assertFalse(self.allows(IsAdminRole, self.staff))
+
+    def test_doctor_does_not_pass_staff_permission(self):
+        self.assertFalse(self.allows(IsStaffRole, self.doctor))
+
+    def test_admin_or_staff_allows_admin_and_staff(self):
+        self.assertTrue(self.allows(IsAdminOrStaff, self.admin))
+        self.assertTrue(self.allows(IsAdminOrStaff, self.staff))
+
+    def test_admin_or_staff_rejects_doctor(self):
+        self.assertFalse(self.allows(IsAdminOrStaff, self.doctor))
+
+    def test_staff_or_doctor_allows_staff_and_doctor(self):
+        self.assertTrue(self.allows(IsStaffOrDoctor, self.staff))
+        self.assertTrue(self.allows(IsStaffOrDoctor, self.doctor))
+
+    def test_staff_or_doctor_rejects_admin(self):
+        self.assertFalse(self.allows(IsStaffOrDoctor, self.admin))
+
+    def test_django_is_staff_is_not_clinic_staff_role(self):
+        self.assertTrue(self.django_staff_doctor.is_staff)
+        self.assertEqual(self.django_staff_doctor.role, "Doctor")
+        self.assertFalse(is_staff_role(self.django_staff_doctor))
+        self.assertFalse(self.allows(IsStaffRole, self.django_staff_doctor))
+        self.assertTrue(self.allows(IsDoctorRole, self.django_staff_doctor))
