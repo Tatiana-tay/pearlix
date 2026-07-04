@@ -1,8 +1,9 @@
 from rest_framework import serializers
 
 from employees.models import EmployeeProfile
+from patients.models import Patient
 
-from .models import AvailabilityException, WorkingShift
+from .models import Appointment, AvailabilityException, WorkingShift
 
 
 class WorkingShiftSerializer(serializers.ModelSerializer):
@@ -110,3 +111,65 @@ class AvailabilityExceptionSerializer(serializers.ModelSerializer):
             "createdAt",
             "updatedAt",
         )
+
+
+class AppointmentSerializer(serializers.ModelSerializer):
+    patientId = serializers.PrimaryKeyRelatedField(
+        source="patient",
+        queryset=Patient.objects.all(),
+    )
+    patientName = serializers.CharField(source="patient.full_name", read_only=True)
+    doctorProfileId = serializers.PrimaryKeyRelatedField(
+        source="doctor_profile",
+        queryset=EmployeeProfile.objects.select_related("user").all(),
+    )
+    doctorName = serializers.CharField(
+        source="doctor_profile.user.full_name",
+        read_only=True,
+    )
+    startAt = serializers.DateTimeField(source="start_at")
+    endAt = serializers.DateTimeField(source="end_at")
+    durationMinutes = serializers.IntegerField(
+        source="duration_minutes",
+        min_value=Appointment.MIN_DURATION_MINUTES,
+    )
+    visitType = serializers.ChoiceField(
+        source="visit_type",
+        choices=Appointment.VisitType.choices,
+    )
+    createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+    updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
+
+    class Meta:
+        model = Appointment
+        fields = (
+            "id",
+            "patientId",
+            "patientName",
+            "doctorProfileId",
+            "doctorName",
+            "startAt",
+            "endAt",
+            "durationMinutes",
+            "visitType",
+            "status",
+            "notes",
+            "version",
+            "createdAt",
+            "updatedAt",
+        )
+        read_only_fields = (
+            "id",
+            "patientName",
+            "doctorName",
+            "status",
+            "version",
+            "createdAt",
+            "updatedAt",
+        )
+
+    def to_internal_value(self, data):
+        incoming = data.copy()
+        if "doctorProfileId" not in incoming and "doctorId" in incoming:
+            incoming["doctorProfileId"] = incoming["doctorId"]
+        return super().to_internal_value(incoming)

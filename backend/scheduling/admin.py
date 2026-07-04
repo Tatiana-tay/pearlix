@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import AvailabilityException, WorkingShift
+from .models import Appointment, AvailabilityException, WorkingShift
 
 
 @admin.register(WorkingShift)
@@ -40,3 +40,24 @@ class AvailabilityExceptionAdmin(admin.ModelAdmin):
         "employee_profile__user__email",
     )
     ordering = ("employee_profile__user__full_name", "start_at")
+
+
+@admin.register(Appointment)
+class AppointmentAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "patient",
+        "doctor_profile",
+        "start_at",
+        "end_at",
+        "status",
+        "updated_at",
+    )
+    list_filter = ("status", "visit_type", "doctor_profile__user__role")
+    search_fields = (
+        "patient__first_name",
+        "patient__last_name",
+        "doctor_profile__user__full_name",
+        "doctor_profile__user__email",
+    )
+    ordering = ("start_at", "id")

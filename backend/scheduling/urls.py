@@ -1,6 +1,8 @@
 from django.urls import path
 
 from .views import (
+    AppointmentDetailView,
+    AppointmentListCreateView,
     AvailabilityExceptionDetailView,
     AvailabilityExceptionListCreateView,
     WorkingShiftDetailView,
@@ -9,6 +11,12 @@ from .views import (
 
 
 urlpatterns = [
+    path("appointments/", AppointmentListCreateView.as_view(), name="appointment-list"),
+    path(
+        "appointments/<int:appointment_id>/",
+        AppointmentDetailView.as_view(),
+        name="appointment-detail",
+    ),
     path("working-shifts/", WorkingShiftListCreateView.as_view(), name="working-shift-list"),
     path(
         "working-shifts/<int:shift_id>/",
