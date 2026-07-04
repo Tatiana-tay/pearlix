@@ -5,6 +5,7 @@ frontend/test-results/
 
 backend/.env
 backend/.venv/
+backend/media/
 backend/__pycache__/
 backend/**/__pycache__/
 backend/*.sqlite3
