@@ -1,9 +1,38 @@
 from django.urls import path
 
-from .views import WorkingShiftDetailView, WorkingShiftListCreateView
+from .views import (
+    AvailabilityExceptionDetailView,
+    AvailabilityExceptionListCreateView,
+    WorkingShiftDetailView,
+    WorkingShiftListCreateView,
+)
 
 
 urlpatterns = [
-    path("", WorkingShiftListCreateView.as_view(), name="working-shift-list"),
-    path("<int:shift_id>/", WorkingShiftDetailView.as_view(), name="working-shift-detail"),
+    path("working-shifts/", WorkingShiftListCreateView.as_view(), name="working-shift-list"),
+    path(
+        "working-shifts/<int:shift_id>/",
+        WorkingShiftDetailView.as_view(),
+        name="working-shift-detail",
+    ),
+    path(
+        "availability-exceptions/",
+        AvailabilityExceptionListCreateView.as_view(),
+        name="availability-exception-list",
+    ),
+    path(
+        "availability-exceptions/<int:exception_id>/",
+        AvailabilityExceptionDetailView.as_view(),
+        name="availability-exception-detail",
+    ),
+    path(
+        "leave-exceptions/",
+        AvailabilityExceptionListCreateView.as_view(),
+        name="leave-exception-list",
+    ),
+    path(
+        "leave-exceptions/<int:exception_id>/",
+        AvailabilityExceptionDetailView.as_view(),
+        name="leave-exception-detail",
+    ),
 ]
