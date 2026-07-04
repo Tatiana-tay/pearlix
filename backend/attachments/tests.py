@@ -574,7 +574,7 @@ class AttachmentAPITests(TempMediaMixin, AttachmentTestHelpers, APITestCase):
             (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
         )
 
-    def test_no_ai_endpoints_or_visit_billing_side_effects(self):
+    def test_ai_storage_endpoints_exist_without_inference_or_visit_billing_side_effects(self):
         visit = self.make_visit_for_attachment("api-no-side-effects")
         appointment_status = visit.appointment.status
         appointment_version = visit.appointment.version
@@ -591,15 +591,26 @@ class AttachmentAPITests(TempMediaMixin, AttachmentTestHelpers, APITestCase):
         ai_attachment_response = self.client.get(
             f"/api/attachments/{upload_response.data['id']}/ai-results/"
         )
+        missing_inference_responses = (
+            self.client.post("/api/predict/", {}, format="json"),
+            self.client.post("/api/infer/", {}, format="json"),
+            self.client.post("/api/train/", {}, format="json"),
+            self.client.post("/api/run-ai/", {}, format="json"),
+            self.client.post("/api/analyze-xray/", {}, format="json"),
+        )
         appointment_response = self.client.get(f"/api/appointments/{visit.appointment_id}/")
         visit_response = self.client.get(f"/api/visits/{visit.id}/")
         visit.refresh_from_db()
         visit.appointment.refresh_from_db()
 
         self.assertEqual(upload_response.status_code, status.HTTP_201_CREATED)
-        self.assertFalse(apps.is_installed("ai_results"))
-        self.assertEqual(ai_list_response.status_code, status.HTTP_404_NOT_FOUND)
-        self.assertEqual(ai_attachment_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(apps.is_installed("ai_results"))
+        self.assertEqual(ai_list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(ai_attachment_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(ai_list_response.data["results"], [])
+        self.assertEqual(ai_attachment_response.data["results"], [])
+        for missing_response in missing_inference_responses:
+            self.assertEqual(missing_response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(visit.status, visit_status)
         self.assertEqual(visit.version, visit_version)
         self.assertEqual(visit.appointment.status, appointment_status)

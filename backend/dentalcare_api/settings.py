@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     "visits",
     "billing",
     "attachments",
+    "ai_results",
 ]
 
 MIDDLEWARE = [
