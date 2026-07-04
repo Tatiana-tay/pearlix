@@ -1,8 +1,12 @@
 from django.urls import path
 
 from .views import (
+    AppointmentChangeLogListView,
     AppointmentDetailView,
     AppointmentListCreateView,
+    AppointmentRescheduleQueueView,
+    AppointmentRescheduleView,
+    AppointmentWorkflowActionView,
     AvailabilityExceptionDetailView,
     AvailabilityExceptionListCreateView,
     WorkingShiftDetailView,
@@ -13,9 +17,54 @@ from .views import (
 urlpatterns = [
     path("appointments/", AppointmentListCreateView.as_view(), name="appointment-list"),
     path(
+        "appointments/reschedule-queue/",
+        AppointmentRescheduleQueueView.as_view(),
+        name="appointment-reschedule-queue",
+    ),
+    path(
         "appointments/<int:appointment_id>/",
         AppointmentDetailView.as_view(),
         name="appointment-detail",
+    ),
+    path(
+        "appointments/<int:appointment_id>/change-logs/",
+        AppointmentChangeLogListView.as_view(),
+        name="appointment-change-logs",
+    ),
+    path(
+        "appointments/<int:appointment_id>/arrive/",
+        AppointmentWorkflowActionView.as_view(action="arrive"),
+        name="appointment-arrive",
+    ),
+    path(
+        "appointments/<int:appointment_id>/check-in/",
+        AppointmentWorkflowActionView.as_view(action="check-in"),
+        name="appointment-check-in",
+    ),
+    path(
+        "appointments/<int:appointment_id>/cancel/",
+        AppointmentWorkflowActionView.as_view(action="cancel"),
+        name="appointment-cancel",
+    ),
+    path(
+        "appointments/<int:appointment_id>/no-show/",
+        AppointmentWorkflowActionView.as_view(action="no-show"),
+        name="appointment-no-show",
+    ),
+    path(
+        "appointments/<int:appointment_id>/postpone/",
+        AppointmentWorkflowActionView.as_view(action="postpone"),
+        name="appointment-postpone",
+    ),
+    path(
+        "appointments/<int:appointment_id>/mark-needs-reschedule/",
+        AppointmentWorkflowActionView.as_view(action="mark-needs-reschedule"),
+        name="appointment-mark-needs-reschedule",
+    ),
+    path(
+        "appointments/<int:appointment_id>/reschedule/",
+        AppointmentRescheduleView.as_view(),
+        name="appointment-reschedule",
     ),
     path("working-shifts/", WorkingShiftListCreateView.as_view(), name="working-shift-list"),
     path(

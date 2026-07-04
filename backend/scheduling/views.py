@@ -13,8 +13,9 @@ from rest_framework.views import APIView
 
 from accounts.permissions import IsActiveUser, is_admin, is_doctor, is_staff_role
 
-from .models import Appointment, AvailabilityException, WorkingShift
+from .models import Appointment, AppointmentChangeLog, AvailabilityException, WorkingShift
 from .serializers import (
+    AppointmentChangeLogSerializer,
     AppointmentSerializer,
     AvailabilityExceptionSerializer,
     WorkingShiftSerializer,
@@ -22,6 +23,123 @@ from .serializers import (
 
 
 User = get_user_model()
+
+
+def create_appointment_change_log(
+    *,
+    appointment,
+    action,
+    previous_status,
+    new_status,
+    changed_by,
+    reason="",
+    note="",
+    old_doctor_profile=None,
+    new_doctor_profile=None,
+    old_start_at=None,
+    old_end_at=None,
+    new_start_at=None,
+    new_end_at=None,
+    metadata=None,
+):
+    return AppointmentChangeLog.objects.create(
+        appointment=appointment,
+        action=action,
+        previous_status=previous_status,
+        new_status=new_status,
+        old_doctor_profile=old_doctor_profile,
+        new_doctor_profile=new_doctor_profile,
+        old_start_at=old_start_at,
+        old_end_at=old_end_at,
+        new_start_at=new_start_at,
+        new_end_at=new_end_at,
+        changed_by=changed_by,
+        reason=reason or "",
+        note=note or "",
+        metadata=metadata or {},
+    )
+
+
+def reject_in_visit_leave_overlap(employee_profile, start_at, end_at):
+    if Appointment.objects.filter(
+        doctor_profile=employee_profile,
+        status=Appointment.Status.IN_VISIT,
+        start_at__lt=end_at,
+        end_at__gt=start_at,
+    ).exists():
+        raise serializers.ValidationError(
+            {"startAt": ["Active leave cannot overlap an In Visit appointment."]}
+        )
+
+
+def mark_leave_affected_appointments(availability_exception, *, changed_by=None):
+    if availability_exception.status != AvailabilityException.Status.ACTIVE:
+        return 0
+
+    affected = list(
+        Appointment.objects.select_for_update().filter(
+            doctor_profile=availability_exception.employee_profile,
+            status__in=Appointment.LEAVE_AFFECTED_STATUSES,
+            start_at__lt=availability_exception.end_at,
+            end_at__gt=availability_exception.start_at,
+        )
+    )
+    now = timezone.now()
+    for appointment in affected:
+        previous_status = appointment.status
+        Appointment.objects.filter(pk=appointment.pk).update(
+            status=Appointment.Status.NEEDS_RESCHEDULE,
+            version=appointment.version + 1,
+            updated_at=now,
+        )
+        appointment.status = Appointment.Status.NEEDS_RESCHEDULE
+        appointment.version += 1
+        appointment.updated_at = now
+        create_appointment_change_log(
+            appointment=appointment,
+            action=AppointmentChangeLog.Action.MARK_NEEDS_RESCHEDULE,
+            previous_status=previous_status,
+            new_status=Appointment.Status.NEEDS_RESCHEDULE,
+            changed_by=changed_by,
+            reason=f"Availability exception: {availability_exception.reason}",
+            metadata={"availabilityExceptionId": availability_exception.id},
+        )
+    return len(affected)
+
+
+def parse_request_version(data):
+    if "version" not in data:
+        raise serializers.ValidationError(
+            {"version": ["This field is required."]}
+        )
+
+    try:
+        version = int(data["version"])
+    except (TypeError, ValueError) as exc:
+        raise serializers.ValidationError(
+            {"version": ["A valid integer is required."]}
+        ) from exc
+
+    if version < 1:
+        raise serializers.ValidationError(
+            {"version": ["Version must be at least 1."]}
+        )
+    return version
+
+
+def version_conflict_response(current_version):
+    return Response(
+        {
+            "detail": "Version conflict",
+            "currentVersion": current_version,
+        },
+        status=status.HTTP_409_CONFLICT,
+    )
+
+
+def get_workflow_reason(data):
+    value = data.get("reason") or data.get("note") or ""
+    return str(value).strip()
 
 
 class WorkingShiftListCreateView(APIView):
@@ -245,7 +363,11 @@ class AvailabilityExceptionListCreateView(APIView):
         serializer.is_valid(raise_exception=True)
 
         save_kwargs = {"created_by": request.user}
-        if serializer.validated_data.get("status") == AvailabilityException.Status.CANCELLED:
+        new_status = serializer.validated_data.get(
+            "status",
+            AvailabilityException.Status.ACTIVE,
+        )
+        if new_status == AvailabilityException.Status.CANCELLED:
             save_kwargs.update(
                 {
                     "cancelled_at": timezone.now(),
@@ -253,10 +375,18 @@ class AvailabilityExceptionListCreateView(APIView):
                 }
             )
 
-        try:
-            serializer.save(**save_kwargs)
-        except DjangoValidationError as exc:
-            raise serializers.ValidationError(exc.message_dict) from exc
+        with transaction.atomic():
+            if new_status == AvailabilityException.Status.ACTIVE:
+                reject_in_visit_leave_overlap(
+                    serializer.validated_data["employee_profile"],
+                    serializer.validated_data["start_at"],
+                    serializer.validated_data["end_at"],
+                )
+            try:
+                exception = serializer.save(**save_kwargs)
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError(exc.message_dict) from exc
+            mark_leave_affected_appointments(exception, changed_by=request.user)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def _parse_datetime_filter(self, name):
@@ -329,6 +459,12 @@ class AvailabilityExceptionDetailView(APIView):
             serializer.is_valid(raise_exception=True)
 
             new_status = serializer.validated_data.get("status", exception.status)
+            new_employee_profile = serializer.validated_data.get(
+                "employee_profile",
+                exception.employee_profile,
+            )
+            new_start_at = serializer.validated_data.get("start_at", exception.start_at)
+            new_end_at = serializer.validated_data.get("end_at", exception.end_at)
             save_kwargs = {"version": exception.version + 1}
             if (
                 new_status == AvailabilityException.Status.CANCELLED
@@ -348,10 +484,18 @@ class AvailabilityExceptionDetailView(APIView):
                     }
                 )
 
+            if new_status == AvailabilityException.Status.ACTIVE:
+                reject_in_visit_leave_overlap(
+                    new_employee_profile,
+                    new_start_at,
+                    new_end_at,
+                )
+
             try:
-                serializer.save(**save_kwargs)
+                exception = serializer.save(**save_kwargs)
             except DjangoValidationError as exc:
                 raise serializers.ValidationError(exc.message_dict) from exc
+            mark_leave_affected_appointments(exception, changed_by=request.user)
             return Response(serializer.data)
 
     def _can_read_exception(self, user, exception):
@@ -481,6 +625,20 @@ class AppointmentListCreateView(APIView):
         return parsed.astimezone(datetime_timezone.utc)
 
 
+class AppointmentRescheduleQueueView(APIView):
+    permission_classes = [IsActiveUser]
+
+    def get(self, request):
+        if not (is_admin(request.user) or is_staff_role(request.user)):
+            raise PermissionDenied("You do not have access to the reschedule queue.")
+
+        appointments = Appointment.objects.select_related(
+            "patient",
+            "doctor_profile__user",
+        ).filter(status=Appointment.Status.NEEDS_RESCHEDULE)
+        return Response({"results": AppointmentSerializer(appointments, many=True).data})
+
+
 class AppointmentDetailView(APIView):
     permission_classes = [IsActiveUser]
 
@@ -564,3 +722,228 @@ class AppointmentDetailView(APIView):
                 {"version": ["Version must be at least 1."]}
             )
         return version
+
+
+class AppointmentChangeLogListView(APIView):
+    permission_classes = [IsActiveUser]
+
+    def get(self, request, appointment_id):
+        appointment = get_object_or_404(
+            Appointment.objects.select_related("doctor_profile__user"),
+            pk=appointment_id,
+        )
+        if not self._can_read_logs(request.user, appointment):
+            raise PermissionDenied("You do not have access to these appointment logs.")
+
+        logs = appointment.change_logs.select_related(
+            "changed_by",
+            "old_doctor_profile",
+            "new_doctor_profile",
+        )
+        return Response({"results": AppointmentChangeLogSerializer(logs, many=True).data})
+
+    def _can_read_logs(self, user, appointment):
+        return (
+            is_admin(user)
+            or is_staff_role(user)
+            or (is_doctor(user) and appointment.doctor_profile.user_id == user.id)
+        )
+
+
+class AppointmentWorkflowActionView(APIView):
+    permission_classes = [IsActiveUser]
+    action = None
+
+    TRANSITIONS = {
+        "arrive": {
+            "from": (Appointment.Status.SCHEDULED,),
+            "to": Appointment.Status.ARRIVED,
+            "log_action": AppointmentChangeLog.Action.ARRIVE,
+        },
+        "check-in": {
+            "from": (Appointment.Status.ARRIVED,),
+            "to": Appointment.Status.CHECKED_IN,
+            "log_action": AppointmentChangeLog.Action.CHECK_IN,
+        },
+        "cancel": {
+            "from": (
+                Appointment.Status.SCHEDULED,
+                Appointment.Status.ARRIVED,
+                Appointment.Status.CHECKED_IN,
+            ),
+            "to": Appointment.Status.CANCELLED,
+            "log_action": AppointmentChangeLog.Action.CANCEL,
+        },
+        "no-show": {
+            "from": (
+                Appointment.Status.SCHEDULED,
+                Appointment.Status.ARRIVED,
+                Appointment.Status.CHECKED_IN,
+            ),
+            "to": Appointment.Status.NO_SHOW,
+            "log_action": AppointmentChangeLog.Action.MARK_NO_SHOW,
+        },
+        "postpone": {
+            "from": (
+                Appointment.Status.SCHEDULED,
+                Appointment.Status.ARRIVED,
+                Appointment.Status.CHECKED_IN,
+            ),
+            "to": Appointment.Status.POSTPONED,
+            "log_action": AppointmentChangeLog.Action.POSTPONE,
+        },
+        "mark-needs-reschedule": {
+            "from": (
+                Appointment.Status.SCHEDULED,
+                Appointment.Status.ARRIVED,
+                Appointment.Status.CHECKED_IN,
+            ),
+            "to": Appointment.Status.NEEDS_RESCHEDULE,
+            "log_action": AppointmentChangeLog.Action.MARK_NEEDS_RESCHEDULE,
+        },
+    }
+
+    def post(self, request, appointment_id):
+        if not is_staff_role(request.user):
+            raise PermissionDenied("Only Staff can perform appointment workflow actions.")
+
+        transition = self.TRANSITIONS.get(self.action)
+        if transition is None:
+            raise serializers.ValidationError(
+                {"action": ["Unsupported appointment workflow action."]}
+            )
+
+        request_version = parse_request_version(request.data)
+        reason = get_workflow_reason(request.data)
+
+        with transaction.atomic():
+            appointment = get_object_or_404(
+                Appointment.objects.select_for_update().select_related(
+                    "patient",
+                    "doctor_profile__user",
+                ),
+                pk=appointment_id,
+            )
+            if appointment.version != request_version:
+                return version_conflict_response(appointment.version)
+
+            if appointment.status in Appointment.TERMINAL_STATUSES:
+                raise serializers.ValidationError(
+                    {"status": ["Terminal appointments cannot be changed."]}
+                )
+            if appointment.status not in transition["from"]:
+                raise serializers.ValidationError(
+                    {"status": ["This status transition is not allowed."]}
+                )
+
+            previous_status = appointment.status
+            new_status = transition["to"]
+            Appointment.objects.filter(pk=appointment.pk).update(
+                status=new_status,
+                version=appointment.version + 1,
+                updated_at=timezone.now(),
+            )
+            appointment.status = new_status
+            appointment.version += 1
+            appointment.refresh_from_db()
+            create_appointment_change_log(
+                appointment=appointment,
+                action=transition["log_action"],
+                previous_status=previous_status,
+                new_status=new_status,
+                changed_by=request.user,
+                reason=reason,
+            )
+            return Response(AppointmentSerializer(appointment).data)
+
+
+class AppointmentRescheduleView(APIView):
+    permission_classes = [IsActiveUser]
+
+    def post(self, request, appointment_id):
+        if not is_staff_role(request.user):
+            raise PermissionDenied("Only Staff can reschedule appointments.")
+
+        request_version = parse_request_version(request.data)
+        reason = get_workflow_reason(request.data)
+        missing_fields = [
+            field
+            for field in ("startAt", "endAt", "durationMinutes")
+            if field not in request.data
+        ]
+        if missing_fields:
+            raise serializers.ValidationError(
+                {field: ["This field is required."] for field in missing_fields}
+            )
+
+        with transaction.atomic():
+            appointment = get_object_or_404(
+                Appointment.objects.select_for_update().select_related(
+                    "patient",
+                    "doctor_profile__user",
+                ),
+                pk=appointment_id,
+            )
+            if appointment.version != request_version:
+                return version_conflict_response(appointment.version)
+
+            if appointment.status in Appointment.TERMINAL_STATUSES:
+                raise serializers.ValidationError(
+                    {"status": ["Terminal appointments cannot be rescheduled."]}
+                )
+            if appointment.status not in (
+                Appointment.Status.NEEDS_RESCHEDULE,
+                Appointment.Status.POSTPONED,
+            ):
+                raise serializers.ValidationError(
+                    {
+                        "status": [
+                            "Only Needs Reschedule or Postponed appointments can be rescheduled."
+                        ]
+                    }
+                )
+
+            old_doctor_profile = appointment.doctor_profile
+            old_start_at = appointment.start_at
+            old_end_at = appointment.end_at
+            previous_status = appointment.status
+
+            data = request.data.copy()
+            data.pop("version", None)
+            data.pop("reason", None)
+            data.pop("note", None)
+            serializer = AppointmentSerializer(
+                appointment,
+                data=data,
+                partial=True,
+            )
+            serializer.is_valid(raise_exception=True)
+            try:
+                appointment = serializer.save(
+                    status=Appointment.Status.SCHEDULED,
+                    version=appointment.version + 1,
+                )
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError(exc.message_dict) from exc
+
+            log = create_appointment_change_log(
+                appointment=appointment,
+                action=AppointmentChangeLog.Action.RESCHEDULE,
+                previous_status=previous_status,
+                new_status=Appointment.Status.SCHEDULED,
+                old_doctor_profile=old_doctor_profile,
+                new_doctor_profile=appointment.doctor_profile,
+                old_start_at=old_start_at,
+                old_end_at=old_end_at,
+                new_start_at=appointment.start_at,
+                new_end_at=appointment.end_at,
+                changed_by=request.user,
+                reason=reason,
+                note=request.data.get("note", ""),
+            )
+            return Response(
+                {
+                    "appointment": AppointmentSerializer(appointment).data,
+                    "changeLog": AppointmentChangeLogSerializer(log).data,
+                }
+            )

@@ -218,6 +218,17 @@ class Appointment(models.Model):
         Status.IN_VISIT,
         Status.NEEDS_RESCHEDULE,
     )
+    LEAVE_AFFECTED_STATUSES = (
+        Status.SCHEDULED,
+        Status.ARRIVED,
+        Status.CHECKED_IN,
+        Status.NEEDS_RESCHEDULE,
+    )
+    TERMINAL_STATUSES = (
+        Status.CANCELLED,
+        Status.NO_SHOW,
+        Status.COMPLETED,
+    )
     MIN_DURATION_MINUTES = 15
 
     patient = models.ForeignKey(
@@ -395,3 +406,75 @@ class Appointment(models.Model):
 
     def __str__(self) -> str:
         return f"{self.patient.full_name} with {self.doctor_profile.user.full_name}"
+
+
+class AppointmentChangeLog(models.Model):
+    class Action(models.TextChoices):
+        ARRIVE = "Arrive", "Arrive"
+        CHECK_IN = "Check In", "Check In"
+        CANCEL = "Cancel", "Cancel"
+        MARK_NO_SHOW = "Mark No-show", "Mark No-show"
+        POSTPONE = "Postpone", "Postpone"
+        MARK_NEEDS_RESCHEDULE = "Mark Needs Reschedule", "Mark Needs Reschedule"
+        RESCHEDULE = "Reschedule", "Reschedule"
+
+    appointment = models.ForeignKey(
+        Appointment,
+        on_delete=models.CASCADE,
+        related_name="change_logs",
+    )
+    action = models.CharField(max_length=40, choices=Action.choices)
+    previous_status = models.CharField(
+        max_length=30,
+        choices=Appointment.Status.choices,
+        blank=True,
+    )
+    new_status = models.CharField(
+        max_length=30,
+        choices=Appointment.Status.choices,
+        blank=True,
+    )
+    old_doctor_profile = models.ForeignKey(
+        EmployeeProfile,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="old_appointment_change_logs",
+    )
+    new_doctor_profile = models.ForeignKey(
+        EmployeeProfile,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="new_appointment_change_logs",
+    )
+    old_start_at = models.DateTimeField(null=True, blank=True)
+    old_end_at = models.DateTimeField(null=True, blank=True)
+    new_start_at = models.DateTimeField(null=True, blank=True)
+    new_end_at = models.DateTimeField(null=True, blank=True)
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="appointment_change_logs",
+    )
+    reason = models.TextField(blank=True)
+    note = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("created_at", "id")
+        indexes = [
+            models.Index(fields=["appointment"]),
+            models.Index(fields=["created_at"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk and AppointmentChangeLog.objects.filter(pk=self.pk).exists():
+            raise ValidationError("Appointment change logs are append-only.")
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.action} for appointment {self.appointment_id}"

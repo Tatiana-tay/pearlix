@@ -3,7 +3,7 @@ from rest_framework import serializers
 from employees.models import EmployeeProfile
 from patients.models import Patient
 
-from .models import Appointment, AvailabilityException, WorkingShift
+from .models import Appointment, AppointmentChangeLog, AvailabilityException, WorkingShift
 
 
 class WorkingShiftSerializer(serializers.ModelSerializer):
@@ -173,3 +173,46 @@ class AppointmentSerializer(serializers.ModelSerializer):
         if "doctorProfileId" not in incoming and "doctorId" in incoming:
             incoming["doctorProfileId"] = incoming["doctorId"]
         return super().to_internal_value(incoming)
+
+
+class AppointmentChangeLogSerializer(serializers.ModelSerializer):
+    logId = serializers.IntegerField(source="id", read_only=True)
+    appointmentId = serializers.IntegerField(source="appointment_id", read_only=True)
+    oldDoctorId = serializers.IntegerField(
+        source="old_doctor_profile_id",
+        read_only=True,
+    )
+    newDoctorId = serializers.IntegerField(
+        source="new_doctor_profile_id",
+        read_only=True,
+    )
+    oldStartAt = serializers.DateTimeField(source="old_start_at", read_only=True)
+    oldEndAt = serializers.DateTimeField(source="old_end_at", read_only=True)
+    newStartAt = serializers.DateTimeField(source="new_start_at", read_only=True)
+    newEndAt = serializers.DateTimeField(source="new_end_at", read_only=True)
+    oldStatus = serializers.CharField(source="previous_status", read_only=True)
+    newStatus = serializers.CharField(source="new_status", read_only=True)
+    changedBy = serializers.IntegerField(source="changed_by_id", read_only=True)
+    changedAt = serializers.DateTimeField(source="created_at", read_only=True)
+
+    class Meta:
+        model = AppointmentChangeLog
+        fields = (
+            "logId",
+            "appointmentId",
+            "action",
+            "oldDoctorId",
+            "newDoctorId",
+            "oldStartAt",
+            "oldEndAt",
+            "newStartAt",
+            "newEndAt",
+            "oldStatus",
+            "newStatus",
+            "reason",
+            "note",
+            "changedBy",
+            "changedAt",
+            "metadata",
+        )
+        read_only_fields = fields
