@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     "patients",
     "employees",
     "scheduling",
+    "visits",
 ]
 
 MIDDLEWARE = [

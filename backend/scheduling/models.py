@@ -417,6 +417,8 @@ class AppointmentChangeLog(models.Model):
         POSTPONE = "Postpone", "Postpone"
         MARK_NEEDS_RESCHEDULE = "Mark Needs Reschedule", "Mark Needs Reschedule"
         RESCHEDULE = "Reschedule", "Reschedule"
+        START_VISIT = "Start Visit", "Start Visit"
+        COMPLETE_VISIT = "Complete Visit", "Complete Visit"
 
     appointment = models.ForeignKey(
         Appointment,

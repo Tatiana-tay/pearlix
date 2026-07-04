@@ -265,12 +265,12 @@ class AppointmentWorkflowTests(AppointmentTestHelpers, APITestCase):
         self.assertEqual(response.data["detail"], "Version conflict")
         self.assertEqual(response.data["currentVersion"], 3)
 
-    def test_no_start_visit_endpoint_is_exposed_in_phase_8(self):
+    def test_staff_still_cannot_use_start_visit_endpoint(self):
         appointment = self.make_workflow_appointment(
-            "no-start-visit",
+            "staff-start-visit",
             status_value=Appointment.Status.CHECKED_IN,
         )
-        self.authenticate(self.doctor)
+        self.authenticate(self.staff)
 
         response = self.client.post(
             f"/api/appointments/{appointment.id}/start-visit/",
@@ -278,7 +278,7 @@ class AppointmentWorkflowTests(AppointmentTestHelpers, APITestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         appointment.refresh_from_db()
         self.assertEqual(appointment.status, Appointment.Status.CHECKED_IN)
 
