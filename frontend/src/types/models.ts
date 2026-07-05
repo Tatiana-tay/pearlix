@@ -221,12 +221,18 @@ export interface BackendStaffProfile {
 export interface BackendShift {
   id: string;
   staffOrDoctorId: string;
+  employeeProfileId?: string;
+  employeeName?: string;
   dayOfWeek: string;
   shiftName: string;
   shiftIndex: number;
   startTime: string;
   endTime: string;
+  isActive?: boolean;
   isOnLeave: boolean;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface BackendAppointment {
@@ -243,16 +249,23 @@ export interface BackendAppointment {
 }
 
 export interface BackendAvailabilityException {
+  id?: string;
   exceptionId: string;
   userId: string;
+  employeeProfileId?: string;
+  employeeName?: string;
   userRole: AvailabilityException["userRole"];
   startDateTime: string;
   endDateTime: string;
+  startAt?: string;
+  endAt?: string;
   reason: AvailabilityException["reason"];
   note?: string;
   status: AvailabilityException["status"];
   createdBy: string;
   createdAt: string;
+  updatedAt?: string;
+  version?: number;
 }
 
 export interface BackendAppointmentChangeLog {

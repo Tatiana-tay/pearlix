@@ -9,7 +9,23 @@ import {
   updateEmployeeProfile,
   type EmployeeProfilePayload,
 } from "../../api/employeeProfiles";
+import {
+  adaptAvailabilityExceptionDTO,
+  createAvailabilityException,
+  listAvailabilityExceptions,
+  toAvailabilityExceptionPayload,
+  toAvailabilityExceptionUpdatePayload,
+  updateAvailabilityException,
+} from "../../api/availabilityExceptions";
 import { isApiError } from "../../api/errors";
+import {
+  adaptWorkingShiftList,
+  createWorkingShift,
+  listWorkingShifts,
+  toWorkingShiftPayload,
+  toWorkingShiftUpdatePayload,
+  updateWorkingShift,
+} from "../../api/workingShifts";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { EditableShiftsEditor } from "../../components/staff/EditableShiftsEditor";
 import { StaffProfileDrawer } from "../../components/staff/StaffProfileDrawer";
@@ -24,17 +40,13 @@ import { StatCard } from "../../components/ui/StatCard";
 import { Textarea } from "../../components/ui/Textarea";
 import { TimeInput } from "../../components/ui/TimeInput";
 import { useCurrentUser, useSession } from "../../context/SessionContext";
-import { getPatientById, getShiftsForStaffProfile, getStaffProfileById } from "../../data/adapters";
+import { getPatientById, getStaffProfileById } from "../../data/adapters";
 import type { AvailabilityException, BackendAppointment, BackendAvailabilityException, BackendShift, BackendStaffProfile, Gender, ProfileStatus } from "../../types/models";
 import { appointmentEnd, appointmentStart, detectAffectedAppointments, hasOverlappingException, intervalsOverlap, toDateTime, toLocalDateTime } from "../../utils/availability";
 import { fullPatientName, initials } from "../../utils/format";
 import {
   loadMockAppointments,
-  loadMockAvailabilityExceptions,
-  saveMockAppointments,
-  saveMockAvailabilityExceptions,
 } from "../../utils/mockScheduleState";
-import { loadMockShifts, saveMockShifts } from "../../utils/mockClinicState";
 import { getShiftValidationMessage, sortShifts } from "../../utils/shifts";
 import { appointmentStatusTone, userStatusTone } from "../../utils/statusStyles";
 
@@ -57,9 +69,9 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
   const currentUser = useCurrentUser();
   const { accessToken, clearSession } = useSession();
   const [profiles, setProfiles] = useState<BackendStaffProfile[]>([]);
-  const [shiftRows, setShiftRows] = useState<BackendShift[]>(loadMockShifts);
-  const [appointmentRows, setAppointmentRows] = useState<BackendAppointment[]>(loadMockAppointments);
-  const [availabilityExceptionRows, setAvailabilityExceptionRows] = useState<BackendAvailabilityException[]>(loadMockAvailabilityExceptions);
+  const [shiftRows, setShiftRows] = useState<BackendShift[]>([]);
+  const [appointmentRows] = useState<BackendAppointment[]>(loadMockAppointments);
+  const [availabilityExceptionRows, setAvailabilityExceptionRows] = useState<BackendAvailabilityException[]>([]);
   const [scheduleStaff, setScheduleStaff] = useState<BackendStaffProfile | null>(null);
   const [profileStaff, setProfileStaff] = useState<BackendStaffProfile | null>(null);
   const [leaveStaff, setLeaveStaff] = useState<BackendStaffProfile | null>(null);
@@ -86,11 +98,21 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
     setPageError("");
 
     listEmployeeProfiles({ accessToken })
-      .then((employeeProfiles) => {
+      .then(async (employeeProfiles) => {
         if (cancelled) {
           return;
         }
         setProfiles(employeeProfiles.map(adaptEmployeeProfileDTO));
+        const [workingShifts, availabilityExceptions] = await Promise.all([
+          listWorkingShifts({ accessToken }),
+          listAvailabilityExceptions({ accessToken }),
+        ]);
+        if (cancelled) {
+          return;
+        }
+        setShiftRows(adaptWorkingShiftList(workingShifts));
+        setAvailabilityExceptionRows(availabilityExceptions.map(adaptAvailabilityExceptionDTO));
+        setPageError("");
       })
       .catch((error: unknown) => {
         if (cancelled) {
@@ -114,7 +136,7 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
   const todayName = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(new Date(`${today}T00:00:00`));
   const activeToday = profiles.filter((profile) =>
     profile.status === "Active" &&
-    shiftRows.some((shift) => shift.staffOrDoctorId === profile.id && shift.dayOfWeek === todayName && !shift.isOnLeave) &&
+    shiftRows.some((shift) => shift.staffOrDoctorId === profile.id && shift.dayOfWeek === todayName && shift.isActive !== false) &&
     !availabilityExceptionRows.some((exception) =>
       exception.userId === profile.id &&
       exception.status === "Active" &&
@@ -174,13 +196,33 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
     }
   };
 
-  const saveShifts = (staffId: string, shifts: BackendShift[]) => {
-    const normalized = sortShifts(shifts).map((shift, index) => ({ ...shift, staffOrDoctorId: staffId, shiftIndex: index + 1 }));
-    setShiftRows((current) => {
-      const nextShifts = [...current.filter((shift) => shift.staffOrDoctorId !== staffId), ...normalized];
-      saveMockShifts(nextShifts);
-      return nextShifts;
-    });
+  const saveShifts = async (staffId: string, shifts: BackendShift[]) => {
+    if (!accessToken) {
+      throw new Error("Sign in again to edit working shifts.");
+    }
+
+    const previousRows = shiftRows.filter((shift) => shift.staffOrDoctorId === staffId);
+    const nextRows = sortShifts(shifts).map((shift, index) => ({ ...shift, staffOrDoctorId: staffId, employeeProfileId: staffId, shiftIndex: index + 1 }));
+    const nextIds = new Set(nextRows.map((shift) => shift.id));
+
+    try {
+      await Promise.all(nextRows.map(async (shift) => {
+        if (shift.id.startsWith("SHIFT-LOCAL-")) {
+          return createWorkingShift(toWorkingShiftPayload(shift), { accessToken });
+        }
+        return updateWorkingShift(shift.id, toWorkingShiftUpdatePayload(shift), { accessToken });
+      }));
+      await Promise.all(previousRows
+        .filter((shift) => !nextIds.has(shift.id))
+        .map((shift) => updateWorkingShift(shift.id, { ...toWorkingShiftUpdatePayload(shift), isActive: false }, { accessToken })));
+
+      const refreshed = adaptWorkingShiftList(await listWorkingShifts({ accessToken }));
+      setShiftRows(refreshed);
+      setScheduleStaff(null);
+    } catch (error) {
+      handleAuthError(error, clearSession);
+      throw new Error(toEmployeeProfileErrorMessage(error, "Unable to save working shifts."));
+    }
   };
 
   const addStaffMember = async (payload: EmployeeProfilePayload) => {
@@ -199,49 +241,49 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
     }
   };
 
-  const saveLeaveException = (exception: BackendAvailabilityException) => {
-    const affectedAppointments = detectAffectedAppointments(exception, appointmentRows);
-    const affectedIds = new Set(affectedAppointments.map((appointment) => appointment.id));
-    const isEditing = availabilityExceptionRows.some((item) => item.exceptionId === exception.exceptionId);
-    const nextExceptions = isEditing
-      ? availabilityExceptionRows.map((item) => item.exceptionId === exception.exceptionId ? exception : item)
-      : [...availabilityExceptionRows, exception];
-    const nextAppointments = appointmentRows.map((appointment) => {
-      if (!affectedIds.has(appointment.id)) return appointment;
-      return {
-        ...appointment,
-        status: "Needs Reschedule" as const,
-        notes: appointment.notes.includes("Doctor unavailable due to leave")
-          ? appointment.notes
-          : `${appointment.notes}${appointment.notes ? " " : ""}Doctor unavailable due to leave.`,
-      };
-    });
+  const saveLeaveException = async (exception: BackendAvailabilityException) => {
+    if (!accessToken) {
+      throw new Error("Sign in again to edit leave.");
+    }
 
-    setAvailabilityExceptionRows(nextExceptions);
-    setAppointmentRows(nextAppointments);
-    saveMockAvailabilityExceptions(nextExceptions);
-    saveMockAppointments(nextAppointments);
-    setLeaveStaff(null);
-    setEditingLeaveException(null);
-    setAffectedException(exception);
-    setLeaveNotice({
-      message: affectedAppointments.length > 0
-        ? `Leave ${isEditing ? "updated" : "saved"}. ${affectedAppointments.length} appointments were marked as Needs Reschedule.`
-        : `Leave ${isEditing ? "updated" : "saved"}. No appointments affected.`,
-      exception,
-    });
+    const isEditing = availabilityExceptionRows.some((item) => item.exceptionId === exception.exceptionId);
+    try {
+      const savedException = isEditing
+        ? adaptAvailabilityExceptionDTO(await updateAvailabilityException(exception.exceptionId, toAvailabilityExceptionUpdatePayload(exception), { accessToken }))
+        : adaptAvailabilityExceptionDTO(await createAvailabilityException(toAvailabilityExceptionPayload(exception), { accessToken }));
+      setAvailabilityExceptionRows((current) => isEditing
+        ? current.map((item) => item.exceptionId === savedException.exceptionId ? savedException : item)
+        : [...current, savedException]);
+      setLeaveStaff(null);
+      setEditingLeaveException(null);
+      setAffectedException(savedException);
+      setLeaveNotice({ message: `Leave ${isEditing ? "updated" : "saved"}.`, exception: savedException });
+    } catch (error) {
+      handleAuthError(error, clearSession);
+      throw new Error(toEmployeeProfileErrorMessage(error, "Unable to save leave."));
+    }
   };
 
-  const cancelLeaveException = (exceptionId: string) => {
-    const nextExceptions = availabilityExceptionRows.map((exception) =>
-      exception.exceptionId === exceptionId ? { ...exception, status: "Cancelled" as const } : exception,
-    );
-    setAvailabilityExceptionRows(nextExceptions);
-    saveMockAvailabilityExceptions(nextExceptions);
-    setLeaveNotice({
-      message: "Leave cancelled. Future availability is restored, but any Needs Reschedule appointments remain for Staff review.",
-      exception: nextExceptions.find((exception) => exception.exceptionId === exceptionId) ?? null,
-    });
+  const cancelLeaveException = async (exceptionId: string) => {
+    if (!accessToken) {
+      setPageError("Sign in again to cancel leave.");
+      return;
+    }
+    const exception = availabilityExceptionRows.find((item) => item.exceptionId === exceptionId);
+    if (!exception) {
+      return;
+    }
+    try {
+      const cancelled = adaptAvailabilityExceptionDTO(await updateAvailabilityException(exceptionId, {
+        ...toAvailabilityExceptionUpdatePayload(exception),
+        status: "Cancelled",
+      }, { accessToken }));
+      setAvailabilityExceptionRows((current) => current.map((item) => item.exceptionId === exceptionId ? cancelled : item));
+      setLeaveNotice({ message: "Leave cancelled.", exception: cancelled });
+    } catch (error) {
+      handleAuthError(error, clearSession);
+      setPageError(toEmployeeProfileErrorMessage(error, "Unable to cancel leave."));
+    }
   };
 
   const getProfileShifts = (staffId: string) =>
@@ -296,7 +338,7 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
       <div className="grid grid-2">
         {filteredStaff.map((doctor) => {
           const patientsToday = appointmentRows.filter((appointment) => appointment.doctorId === doctor.id && appointment.date === "2026-02-09").length;
-          const mondayShifts = getProfileShifts(doctor.id).filter((shift) => shift.dayOfWeek === "Monday" && !shift.isOnLeave);
+          const mondayShifts = getProfileShifts(doctor.id).filter((shift) => shift.dayOfWeek === "Monday" && shift.isActive !== false);
           const role = doctor.role === "Doctor" ? "Dentist" : doctor.specialty ?? "Clinic Staff";
           return (
             <Card
@@ -359,10 +401,7 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
           doctor={scheduleStaff}
           shifts={scheduleStaff ? getProfileShifts(scheduleStaff.id) : []}
           onClose={() => setScheduleStaff(null)}
-          onSave={(staffId, shifts) => {
-            saveShifts(staffId, shifts);
-            setScheduleStaff(null);
-          }}
+          onSave={saveShifts}
         />
       )}
       {canManageProfiles && <AddStaffMemberModal open={addStaffOpen} onClose={() => setAddStaffOpen(false)} onCreate={addStaffMember} />}
@@ -443,7 +482,7 @@ function LeaveExceptionModal({
   exceptions: BackendAvailabilityException[];
   createdBy: string;
   onClose: () => void;
-  onSave: (exception: BackendAvailabilityException) => void;
+  onSave: (exception: BackendAvailabilityException) => Promise<void> | void;
 }) {
   const [personId, setPersonId] = useState(staff?.id ?? profiles[0]?.id ?? "");
   const [startDate, setStartDate] = useState("2026-03-10");
@@ -453,8 +492,12 @@ function LeaveExceptionModal({
   const [reason, setReason] = useState<AvailabilityException["reason"]>("Leave");
   const [status, setStatus] = useState<AvailabilityException["status"]>("Active");
   const [note, setNote] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    setSaveError("");
+    setSaving(false);
     if (exception) {
       setPersonId(exception.userId);
       setStartDate(exception.startDateTime.slice(0, 10));
@@ -513,13 +556,21 @@ function LeaveExceptionModal({
   const affectedAppointments = draftException && rangeValid ? detectAffectedAppointments(draftException, appointments) : [];
   const canSave = Boolean(selectedPerson && rangeValid && !overlappingException && !inVisitConflict);
 
-  const save = () => {
+  const save = async () => {
     if (!draftException || !canSave) return;
-    onSave({
-      ...draftException,
-      exceptionId: exception?.exceptionId ?? `EXC-${Date.now()}`,
-      createdAt: exception?.createdAt ?? toLocalDateTime(new Date()),
-    });
+    setSaveError("");
+    setSaving(true);
+    try {
+      await onSave({
+        ...draftException,
+        exceptionId: exception?.exceptionId ?? `EXC-${Date.now()}`,
+        createdAt: exception?.createdAt ?? toLocalDateTime(new Date()),
+      });
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Unable to save leave.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -531,8 +582,8 @@ function LeaveExceptionModal({
       width={860}
       footer={
         <>
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button disabled={!canSave} onClick={save}>Save Leave</Button>
+          <Button variant="secondary" disabled={saving} onClick={onClose}>Cancel</Button>
+          <Button disabled={!canSave || saving} onClick={() => { void save(); }}>{saving ? "Saving..." : "Save Leave"}</Button>
         </>
       }
     >
@@ -553,6 +604,7 @@ function LeaveExceptionModal({
         {!rangeValid && <div className="alert-card">Start date and time must be before end date and time.</div>}
         {overlappingException && <div className="alert-card">This leave overlaps an existing active leave exception for the same person.</div>}
         {inVisitConflict && <div className="alert-card">This leave overlaps an appointment that is currently In Visit. Finish the visit or choose a different range.</div>}
+        {saveError && <div className="alert-card">{saveError}</div>}
         {selectedPerson?.role === "Staff" && (
           <div className="notice-card">Staff leave updates team availability only. It will not mark patient appointments as Needs Reschedule in this mock data model.</div>
         )}
@@ -775,15 +827,32 @@ function WorkingHoursModal({
   doctor: BackendStaffProfile | null;
   shifts: BackendShift[];
   onClose: () => void;
-  onSave: (staffId: string, shifts: BackendShift[]) => void;
+  onSave: (staffId: string, shifts: BackendShift[]) => Promise<void> | void;
 }) {
   const [rows, setRows] = useState<BackendShift[]>([]);
+  const [saveError, setSaveError] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setRows(shifts);
+    setSaveError("");
+    setSaving(false);
   }, [doctor?.id, shifts]);
 
   const validationMessage = getShiftValidationMessage(rows);
+  const save = async () => {
+    if (!doctor || validationMessage) return;
+    setSaveError("");
+    setSaving(true);
+    try {
+      await onSave(doctor.id, rows);
+      onClose();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Unable to save working shifts.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <Modal
@@ -794,8 +863,8 @@ function WorkingHoursModal({
       width={960}
       footer={
         <>
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button disabled={Boolean(validationMessage)} onClick={() => doctor && onSave(doctor.id, rows)}>Save Schedule</Button>
+          <Button variant="secondary" disabled={saving} onClick={onClose}>Cancel</Button>
+          <Button disabled={Boolean(validationMessage) || saving} onClick={() => { void save(); }}>{saving ? "Saving..." : "Save Schedule"}</Button>
         </>
       }
     >
@@ -803,6 +872,7 @@ function WorkingHoursModal({
         <div className="stack">
           <EditableShiftsEditor rows={rows} staffOrDoctorId={doctor.id} onRowsChange={setRows} />
           {validationMessage && <div className="alert-card">{validationMessage}</div>}
+          {saveError && <div className="alert-card">{saveError}</div>}
         </div>
       )}
     </Modal>

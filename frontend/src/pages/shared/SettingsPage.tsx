@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { adaptAvailabilityExceptionDTO, listAvailabilityExceptions } from "../../api/availabilityExceptions";
 import { adaptEmployeeProfileDTO, getCurrentEmployeeProfile } from "../../api/employeeProfiles";
 import { isApiError } from "../../api/errors";
+import { adaptWorkingShiftList, listWorkingShifts } from "../../api/workingShifts";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { GroupedShiftsTable } from "../../components/staff/GroupedShiftsTable";
 import { Badge } from "../../components/ui/Badge";
@@ -9,10 +11,9 @@ import { Card } from "../../components/ui/Card";
 import { Input } from "../../components/ui/Input";
 import { Select } from "../../components/ui/Select";
 import { useCurrentUser, useSession } from "../../context/SessionContext";
-import { getShiftsForStaffProfile } from "../../data/adapters";
-import type { BackendStaffProfile } from "../../types/models";
+import type { BackendAvailabilityException, BackendShift, BackendStaffProfile } from "../../types/models";
 import { initials, prettyDate } from "../../utils/format";
-import { loadMockAppointments, loadMockAvailabilityExceptions } from "../../utils/mockScheduleState";
+import { loadMockAppointments } from "../../utils/mockScheduleState";
 import { appointmentStatusTone, userStatusTone } from "../../utils/statusStyles";
 
 export function SettingsPage() {
@@ -20,6 +21,8 @@ export function SettingsPage() {
   const { accessToken, clearSession } = useSession();
   const isAdmin = currentUser.role === "Admin";
   const [profile, setProfile] = useState<BackendStaffProfile | null>(null);
+  const [shiftRows, setShiftRows] = useState<BackendShift[]>([]);
+  const [availabilityExceptionRows, setAvailabilityExceptionRows] = useState<BackendAvailabilityException[]>([]);
   const [loadingProfile, setLoadingProfile] = useState(!isAdmin);
   const [profileError, setProfileError] = useState("");
 
@@ -38,10 +41,17 @@ export function SettingsPage() {
     setLoadingProfile(true);
     setProfileError("");
 
-    getCurrentEmployeeProfile({ accessToken })
-      .then((employeeProfile) => {
+    Promise.all([
+      getCurrentEmployeeProfile({ accessToken }),
+      listWorkingShifts({ accessToken }),
+      listAvailabilityExceptions({ accessToken }),
+    ])
+      .then(([employeeProfile, workingShifts, availabilityExceptions]) => {
         if (!cancelled) {
           setProfile(adaptEmployeeProfileDTO(employeeProfile));
+          setShiftRows(adaptWorkingShiftList(workingShifts));
+          setAvailabilityExceptionRows(availabilityExceptions.map(adaptAvailabilityExceptionDTO));
+          setProfileError("");
         }
       })
       .catch((error: unknown) => {
@@ -64,11 +74,10 @@ export function SettingsPage() {
     };
   }, [accessToken, clearSession, isAdmin]);
 
-  const shifts = profile ? getShiftsForStaffProfile(profile.id) : [];
+  const shifts = profile ? shiftRows.filter((shift) => shift.staffOrDoctorId === profile.id) : [];
   const appointments = loadMockAppointments();
-  const availabilityExceptions = loadMockAvailabilityExceptions();
   const profileExceptions = profile
-    ? availabilityExceptions.filter((exception) => exception.userId === profile.id)
+    ? availabilityExceptionRows.filter((exception) => exception.userId === profile.id)
     : [];
   const todayAppointments = profile
     ? appointments.filter((appointment) => appointment.doctorId === profile.id && appointment.date === "2026-02-09")

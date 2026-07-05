@@ -19,6 +19,8 @@ import { UsersPage } from "../pages/admin/UsersPage";
 import { PatientsPage } from "../pages/staff/PatientsPage";
 import { SettingsPage } from "../pages/shared/SettingsPage";
 import { routes } from "../routes";
+import { adaptAvailabilityExceptionDTO, toAvailabilityExceptionPayload } from "../api/availabilityExceptions";
+import { adaptWorkingShiftDTO, toWorkingShiftPayload } from "../api/workingShifts";
 import type { BackendAIResult, BackendAppointment, BackendAvailabilityException, BackendInvoice, BackendPatient, BackendShift, BackendStaffProfile, User } from "../types/models";
 import { addMinutes, intervalsOverlap, isDoctorAvailableForInterval, toDateTime } from "../utils/availability";
 import { ageFromDate } from "../utils/format";
@@ -266,6 +268,89 @@ describe("appointment scheduling logic", () => {
       }],
       dayOfWeek: "Monday",
     })).toBe(false);
+  });
+});
+
+describe("working shifts and leave API adapters", () => {
+  it("maps backend working shifts to UI rows with version and active state", () => {
+    const shift = adaptWorkingShiftDTO({
+      id: 10,
+      employeeProfileId: 4,
+      fullName: "Dr. Shift Test",
+      role: "Doctor",
+      dayOfWeek: "Monday",
+      startTime: "09:00",
+      endTime: "13:00",
+      isActive: true,
+      version: 2,
+    }, 1);
+
+    expect(shift.staffOrDoctorId).toBe("4");
+    expect(shift.employeeProfileId).toBe("4");
+    expect(shift.employeeName).toBe("Dr. Shift Test");
+    expect(shift.isActive).toBe(true);
+    expect(shift.isOnLeave).toBe(false);
+    expect(shift.version).toBe(2);
+  });
+
+  it("sends isActive to the working shifts API instead of isOnLeave", () => {
+    const payload = toWorkingShiftPayload({
+      id: "10",
+      staffOrDoctorId: "4",
+      employeeProfileId: "4",
+      dayOfWeek: "Monday",
+      shiftName: "Morning",
+      shiftIndex: 1,
+      startTime: "09:00",
+      endTime: "13:00",
+      isActive: false,
+      isOnLeave: true,
+    });
+
+    expect(payload).toEqual(expect.objectContaining({ employeeProfileId: "4", isActive: false }));
+    expect(payload).not.toHaveProperty("isOnLeave");
+  });
+
+  it("maps backend leave exceptions to UI rows with version and timestamps", () => {
+    const exception = adaptAvailabilityExceptionDTO({
+      id: 12,
+      employeeProfileId: 4,
+      fullName: "Dr. Leave Test",
+      role: "Doctor",
+      startAt: "2026-03-10T07:00:00Z",
+      endAt: "2026-03-10T11:00:00Z",
+      reason: "Leave",
+      note: "",
+      status: "Active",
+      version: 3,
+    });
+
+    expect(exception.exceptionId).toBe("12");
+    expect(exception.userId).toBe("4");
+    expect(exception.employeeProfileId).toBe("4");
+    expect(exception.startDateTime).toBe("2026-03-10T07:00:00Z");
+    expect(exception.endDateTime).toBe("2026-03-10T11:00:00Z");
+    expect(exception.version).toBe(3);
+  });
+
+  it("keeps leave reason required while omitting blank optional notes", () => {
+    const payload = toAvailabilityExceptionPayload({
+      exceptionId: "12",
+      userId: "4",
+      employeeProfileId: "4",
+      userRole: "Doctor",
+      startDateTime: "2026-03-10T09:00",
+      endDateTime: "2026-03-10T13:00",
+      reason: "Leave",
+      note: "   ",
+      status: "Active",
+      createdBy: "1",
+      createdAt: "2026-03-01T09:00",
+    });
+
+    expect(payload.reason).toBe("Leave");
+    expect(payload).not.toHaveProperty("note");
+    expect(payload.startAt).toMatch(/Z$/);
   });
 });
 
@@ -638,6 +723,22 @@ describe("detail drawer layout", () => {
           avatarUrl: "",
           version: 1,
         }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      if (url.endsWith("/api/working-shifts/")) {
+        return new Response(JSON.stringify({
+          results: [{
+            id: "SHIFT-001",
+            employeeProfileId: "DOC-001",
+            dayOfWeek: "Monday",
+            startTime: "09:00",
+            endTime: "13:00",
+            isActive: true,
+            version: 1,
+          }],
+        }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      if (url.endsWith("/api/availability-exceptions/")) {
+        return new Response(JSON.stringify({ results: [] }), { headers: { "Content-Type": "application/json" }, status: 200 });
       }
       return new Response(JSON.stringify({ detail: "Not found." }), { headers: { "Content-Type": "application/json" }, status: 404 });
     }));

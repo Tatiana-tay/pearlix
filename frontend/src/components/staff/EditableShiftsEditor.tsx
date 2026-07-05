@@ -51,14 +51,14 @@ export function EditableShiftsEditor({ rows, staffOrDoctorId, onRowsChange }: Ed
                 <tr key={row.id}>
                   {index === 0 && <td rowSpan={shifts.length}><strong>{day}</strong></td>}
                   <td><Input value={row.shiftName} onChange={(event) => updateRow(row.id, { shiftName: event.target.value })} /></td>
-                  <td><TimeInput aria-label={`${row.dayOfWeek} ${row.shiftName} start time`} value={row.startTime === "-" ? "" : row.startTime} disabled={row.isOnLeave} onChange={(event) => updateRow(row.id, { startTime: event.target.value || "-" })} /></td>
-                  <td><TimeInput aria-label={`${row.dayOfWeek} ${row.shiftName} end time`} value={row.endTime === "-" ? "" : row.endTime} disabled={row.isOnLeave} onChange={(event) => updateRow(row.id, { endTime: event.target.value || "-" })} /></td>
+                  <td><TimeInput aria-label={`${row.dayOfWeek} ${row.shiftName} start time`} value={row.startTime === "-" ? "" : row.startTime} disabled={row.isActive === false} onChange={(event) => updateRow(row.id, { startTime: event.target.value || "-" })} /></td>
+                  <td><TimeInput aria-label={`${row.dayOfWeek} ${row.shiftName} end time`} value={row.endTime === "-" ? "" : row.endTime} disabled={row.isActive === false} onChange={(event) => updateRow(row.id, { endTime: event.target.value || "-" })} /></td>
                   <td>
                     <button
                       type="button"
-                      className={`switch ${row.isOnLeave ? "active" : ""}`}
-                      aria-label={`${row.dayOfWeek} ${row.shiftName} on leave`}
-                      onClick={() => updateRow(row.id, { isOnLeave: !row.isOnLeave })}
+                      className={`switch ${row.isActive !== false ? "active" : ""}`}
+                      aria-label={`${row.dayOfWeek} ${row.shiftName} active`}
+                      onClick={() => updateRow(row.id, { isActive: row.isActive === false, isOnLeave: row.isActive !== false })}
                     />
                   </td>
                   <td>

@@ -58,8 +58,8 @@ export function GroupedShiftsTable({ shifts }: GroupedShiftsTableProps) {
                       <span className="muted">Off</span>
                     ) : (
                       dayShifts.map((shift) => (
-                        <span className={shift.isOnLeave ? "schedule-off" : undefined} key={shift.id}>
-                          {shift.isOnLeave ? "Off" : `${shift.startTime}-${shift.endTime}`}
+                        <span className={shift.isActive === false ? "schedule-off" : undefined} key={shift.id}>
+                          {shift.isActive === false ? "Off" : `${shift.startTime}-${shift.endTime}`}
                         </span>
                       ))
                     )}

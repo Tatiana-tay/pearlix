@@ -27,7 +27,7 @@ interface StaffProfileDrawerProps {
   appointments?: BackendAppointment[];
   availabilityExceptions?: BackendAvailabilityException[];
   onSaveProfile?: (staff: BackendStaffProfile) => BackendStaffProfile | Promise<BackendStaffProfile> | void | Promise<void>;
-  onSaveShifts?: (staffId: string, shifts: BackendShift[]) => void;
+  onSaveShifts?: (staffId: string, shifts: BackendShift[]) => Promise<void> | void;
   onAddLeave?: (staff: BackendStaffProfile) => void;
   onEditLeave?: (exception: BackendAvailabilityException) => void;
   onCancelLeave?: (exceptionId: string) => void;
@@ -104,7 +104,7 @@ export function StaffProfileDrawer({
     try {
       const savedProfile = await onSaveProfile?.(draftStaff);
       const nextProfile = savedProfile ?? draftStaff;
-      onSaveShifts?.(nextProfile.id, savedShifts);
+      await onSaveShifts?.(nextProfile.id, savedShifts);
       setDraftStaff(nextProfile);
       setEditMode(false);
     } catch (caughtError) {

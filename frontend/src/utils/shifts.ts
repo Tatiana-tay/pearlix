@@ -63,12 +63,13 @@ export function createShift(staffOrDoctorId: string, existingRows: BackendShift[
     shiftIndex: nextIndex,
     startTime: nextIndex === 1 ? "09:00" : "14:00",
     endTime: nextIndex === 1 ? "13:00" : "18:00",
+    isActive: true,
     isOnLeave: false,
   };
 }
 
 export function getShiftValidationMessage(rows: BackendShift[]) {
-  const activeRows = rows.filter((row) => !row.isOnLeave);
+  const activeRows = rows.filter((row) => row.isActive !== false);
   for (const row of activeRows) {
     if (row.startTime === "-" || row.endTime === "-" || timeToMinutes(row.startTime) >= timeToMinutes(row.endTime)) {
       return "Each active shift must have a start time before its end time.";
