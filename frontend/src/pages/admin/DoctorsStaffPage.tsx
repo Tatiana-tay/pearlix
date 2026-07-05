@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { CalendarDays, Mail, Phone, Plus, Search, Stethoscope, UserCheck, UserX, Users } from "lucide-react";
+import {
+  adaptEmployeeProfileDTO,
+  createEmployeeProfile,
+  getEmployeeProfile,
+  listEmployeeProfiles,
+  toEmployeeProfilePayload,
+  updateEmployeeProfile,
+  type EmployeeProfilePayload,
+} from "../../api/employeeProfiles";
+import { isApiError } from "../../api/errors";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { EditableShiftsEditor } from "../../components/staff/EditableShiftsEditor";
 import { StaffProfileDrawer } from "../../components/staff/StaffProfileDrawer";
@@ -11,11 +21,10 @@ import { Input } from "../../components/ui/Input";
 import { Modal } from "../../components/ui/Modal";
 import { Select } from "../../components/ui/Select";
 import { StatCard } from "../../components/ui/StatCard";
-import { Tabs } from "../../components/ui/Tabs";
 import { Textarea } from "../../components/ui/Textarea";
 import { TimeInput } from "../../components/ui/TimeInput";
-import { useCurrentUser } from "../../context/SessionContext";
-import { getPatientById, getShiftsForStaffProfile, getStaffProfileById, staffProfiles as initialStaffProfiles } from "../../data/adapters";
+import { useCurrentUser, useSession } from "../../context/SessionContext";
+import { getPatientById, getShiftsForStaffProfile, getStaffProfileById } from "../../data/adapters";
 import type { AvailabilityException, BackendAppointment, BackendAvailabilityException, BackendShift, BackendStaffProfile, Gender, ProfileStatus } from "../../types/models";
 import { appointmentEnd, appointmentStart, detectAffectedAppointments, hasOverlappingException, intervalsOverlap, toDateTime, toLocalDateTime } from "../../utils/availability";
 import { fullPatientName, initials } from "../../utils/format";
@@ -25,8 +34,8 @@ import {
   saveMockAppointments,
   saveMockAvailabilityExceptions,
 } from "../../utils/mockScheduleState";
-import { loadMockStaffProfiles, loadMockShifts, saveMockStaffProfiles, saveMockShifts } from "../../utils/mockClinicState";
-import { createShift, getShiftValidationMessage, sortShifts } from "../../utils/shifts";
+import { loadMockShifts, saveMockShifts } from "../../utils/mockClinicState";
+import { getShiftValidationMessage, sortShifts } from "../../utils/shifts";
 import { appointmentStatusTone, userStatusTone } from "../../utils/statusStyles";
 
 interface DoctorsStaffPageProps {
@@ -34,8 +43,7 @@ interface DoctorsStaffPageProps {
 }
 
 interface StaffFormState {
-  fullName: string;
-  email: string;
+  userId: string;
   phone: string;
   role: BackendStaffProfile["role"];
   gender: Gender;
@@ -47,7 +55,8 @@ const leaveReasons: AvailabilityException["reason"][] = ["Leave", "Sick Leave", 
 
 export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
   const currentUser = useCurrentUser();
-  const [profiles, setProfiles] = useState<BackendStaffProfile[]>(loadMockStaffProfiles);
+  const { accessToken, clearSession } = useSession();
+  const [profiles, setProfiles] = useState<BackendStaffProfile[]>([]);
   const [shiftRows, setShiftRows] = useState<BackendShift[]>(loadMockShifts);
   const [appointmentRows, setAppointmentRows] = useState<BackendAppointment[]>(loadMockAppointments);
   const [availabilityExceptionRows, setAvailabilityExceptionRows] = useState<BackendAvailabilityException[]>(loadMockAvailabilityExceptions);
@@ -61,6 +70,45 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
+  const [loadingProfiles, setLoadingProfiles] = useState(true);
+  const [pageError, setPageError] = useState("");
+  const canManageProfiles = currentUser.role === "Admin" && !readOnly;
+
+  useEffect(() => {
+    if (!accessToken) {
+      setLoadingProfiles(false);
+      setPageError("Sign in again to view employee profiles.");
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingProfiles(true);
+    setPageError("");
+
+    listEmployeeProfiles({ accessToken })
+      .then((employeeProfiles) => {
+        if (cancelled) {
+          return;
+        }
+        setProfiles(employeeProfiles.map(adaptEmployeeProfileDTO));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        handleAuthError(error, clearSession);
+        setPageError(toEmployeeProfileErrorMessage(error, "Unable to load employee profiles."));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingProfiles(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, clearSession]);
 
   const today = "2026-02-09";
   const todayName = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(new Date(`${today}T00:00:00`));
@@ -87,14 +135,43 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
   }, [profiles, query, roleFilter, statusFilter]);
   const activeFilters = (roleFilter !== "All" ? 1 : 0) + (statusFilter !== "All" ? 1 : 0);
 
-  const saveProfile = (updatedProfile: BackendStaffProfile) => {
-    setProfiles((current) => {
-      const nextProfiles = current.map((profile) => profile.id === updatedProfile.id ? updatedProfile : profile);
-      saveMockStaffProfiles(nextProfiles);
-      return nextProfiles;
-    });
-    setProfileStaff(updatedProfile);
-    setScheduleStaff((current) => current?.id === updatedProfile.id ? updatedProfile : current);
+  const openProfile = (profile: BackendStaffProfile) => {
+    setProfileStaff(profile);
+    setPageError("");
+
+    if (!accessToken) {
+      return;
+    }
+
+    getEmployeeProfile(profile.id, { accessToken })
+      .then((freshProfile) => {
+        const adaptedProfile = adaptEmployeeProfileDTO(freshProfile);
+        setProfiles((current) => current.map((item) => item.id === adaptedProfile.id ? adaptedProfile : item));
+        setProfileStaff(adaptedProfile);
+      })
+      .catch((error: unknown) => {
+        handleAuthError(error, clearSession);
+        setPageError(toEmployeeProfileErrorMessage(error, "Unable to refresh employee profile."));
+      });
+  };
+
+  const saveProfile = async (updatedProfile: BackendStaffProfile) => {
+    if (!accessToken) {
+      throw new Error("Sign in again to edit employee profiles.");
+    }
+
+    try {
+      const savedProfile = adaptEmployeeProfileDTO(
+        await updateEmployeeProfile(updatedProfile.id, toEmployeeProfilePayload(updatedProfile), { accessToken }),
+      );
+      setProfiles((current) => current.map((profile) => profile.id === savedProfile.id ? savedProfile : profile));
+      setProfileStaff(savedProfile);
+      setScheduleStaff((current) => current?.id === savedProfile.id ? savedProfile : current);
+      return savedProfile;
+    } catch (error) {
+      handleAuthError(error, clearSession);
+      throw new Error(toEmployeeProfileErrorMessage(error, "Unable to save employee profile."));
+    }
   };
 
   const saveShifts = (staffId: string, shifts: BackendShift[]) => {
@@ -106,19 +183,20 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
     });
   };
 
-  const addStaffMember = (profile: BackendStaffProfile, shifts: BackendShift[]) => {
-    setProfiles((current) => {
-      const nextProfiles = [...current, profile];
-      saveMockStaffProfiles(nextProfiles);
-      return nextProfiles;
-    });
-    setShiftRows((current) => {
-      const nextShifts = [...current, ...shifts];
-      saveMockShifts(nextShifts);
-      return nextShifts;
-    });
-    setProfileStaff(profile);
-    setAddStaffOpen(false);
+  const addStaffMember = async (payload: EmployeeProfilePayload) => {
+    if (!accessToken) {
+      throw new Error("Sign in again to create employee profiles.");
+    }
+
+    try {
+      const createdProfile = adaptEmployeeProfileDTO(await createEmployeeProfile(payload, { accessToken }));
+      setProfiles((current) => [...current, createdProfile]);
+      setProfileStaff(createdProfile);
+      setAddStaffOpen(false);
+    } catch (error) {
+      handleAuthError(error, clearSession);
+      throw new Error(toEmployeeProfileErrorMessage(error, "Unable to create employee profile."));
+    }
   };
 
   const saveLeaveException = (exception: BackendAvailabilityException) => {
@@ -174,8 +252,9 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
       <PageHeader
         title="Doctors & Staff"
         subtitle={readOnly ? "View clinic team profiles and schedules." : "Manage clinic staff and schedules."}
-        actions={!readOnly && <Button icon={<Plus size={18} />} onClick={() => setAddStaffOpen(true)}>Add Staff Member</Button>}
+        actions={canManageProfiles && <Button icon={<Plus size={18} />} onClick={() => setAddStaffOpen(true)}>Add Staff Member</Button>}
       />
+      {pageError && <div className="alert-card">{pageError}</div>}
       {leaveNotice && (
         <div className="notice-card between">
           <span>{leaveNotice.message}</span>
@@ -211,6 +290,9 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
           </FilterPopover>
         </div>
       </Card>
+      {loadingProfiles ? (
+        <div className="empty-inline">Loading employee profiles...</div>
+      ) : (
       <div className="grid grid-2">
         {filteredStaff.map((doctor) => {
           const patientsToday = appointmentRows.filter((appointment) => appointment.doctorId === doctor.id && appointment.date === "2026-02-09").length;
@@ -222,11 +304,11 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
               key={doctor.id}
               role="button"
               tabIndex={0}
-              onClick={() => setProfileStaff(doctor)}
+              onClick={() => openProfile(doctor)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
-                  setProfileStaff(doctor);
+                  openProfile(doctor);
                 }
               }}
             >
@@ -253,24 +335,26 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
             </Card>
           );
         })}
+        {filteredStaff.length === 0 && <div className="empty-inline">No employee profiles found.</div>}
       </div>
+      )}
       <StaffProfileDrawer
         staff={profileStaff}
         open={Boolean(profileStaff)}
         onClose={() => setProfileStaff(null)}
         onEditWorkingHours={(staff) => setScheduleStaff(staff)}
-        readOnly={readOnly}
+        readOnly={!canManageProfiles}
         shifts={profileStaff ? getProfileShifts(profileStaff.id) : []}
         appointments={appointmentRows}
         availabilityExceptions={availabilityExceptionRows}
         onSaveProfile={saveProfile}
         onSaveShifts={saveShifts}
-        onAddLeave={!readOnly ? setLeaveStaff : undefined}
-        onEditLeave={!readOnly ? setEditingLeaveException : undefined}
-        onCancelLeave={!readOnly ? cancelLeaveException : undefined}
+        onAddLeave={canManageProfiles ? setLeaveStaff : undefined}
+        onEditLeave={canManageProfiles ? setEditingLeaveException : undefined}
+        onCancelLeave={canManageProfiles ? cancelLeaveException : undefined}
         onViewAffectedAppointments={setAffectedException}
       />
-      {!readOnly && (
+      {canManageProfiles && (
         <WorkingHoursModal
           doctor={scheduleStaff}
           shifts={scheduleStaff ? getProfileShifts(scheduleStaff.id) : []}
@@ -281,8 +365,8 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
           }}
         />
       )}
-      {!readOnly && <AddStaffMemberModal open={addStaffOpen} onClose={() => setAddStaffOpen(false)} onCreate={addStaffMember} />}
-      {!readOnly && (
+      {canManageProfiles && <AddStaffMemberModal open={addStaffOpen} onClose={() => setAddStaffOpen(false)} onCreate={addStaffMember} />}
+      {canManageProfiles && (
         <LeaveExceptionModal
           staff={leaveStaff}
           exception={editingLeaveException}
@@ -304,6 +388,42 @@ export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
       />
     </div>
   );
+}
+
+function handleAuthError(error: unknown, clearSession: (message?: string) => void) {
+  if (isApiError(error) && error.status === 401) {
+    clearSession("Your session has expired. Please sign in again.");
+  }
+}
+
+function toEmployeeProfileErrorMessage(error: unknown, fallback: string) {
+  if (isApiError(error)) {
+    const validationMessage = formatValidationErrors(error.validationErrors);
+    if (validationMessage) {
+      return validationMessage;
+    }
+
+    return error.message || fallback;
+  }
+
+  if (error instanceof TypeError) {
+    return "Cannot reach the backend. Make sure the backend server is running and try again.";
+  }
+  if (error instanceof Error) {
+    return error.message || fallback;
+  }
+
+  return fallback;
+}
+
+function formatValidationErrors(errors: Record<string, string[]> | undefined) {
+  if (!errors) {
+    return "";
+  }
+
+  return Object.entries(errors)
+    .map(([field, messages]) => `${field}: ${messages.join(" ")}`)
+    .join(" ");
 }
 
 function LeaveExceptionModal({
@@ -559,36 +679,31 @@ function AddStaffMemberModal({
 }: {
   open: boolean;
   onClose: () => void;
-  onCreate: (profile: BackendStaffProfile, shifts: BackendShift[]) => void;
+  onCreate: (profile: EmployeeProfilePayload) => Promise<void> | void;
 }) {
-  const [activeTab, setActiveTab] = useState("general");
   const [form, setForm] = useState<StaffFormState>({
-    fullName: "Dr. Maya Rivera",
-    email: "maya.rivera@dentalcare.local",
+    userId: "",
     phone: "(555) 000-0000",
     role: "Doctor",
     gender: "Female",
     specialty: "General Dentistry",
     status: "Active",
   });
-  const [tempId, setTempId] = useState("NEW-STAFF");
-  const [shifts, setShifts] = useState<BackendShift[]>([]);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (open) {
-      const nextTempId = `NEW-${Date.now()}`;
-      setTempId(nextTempId);
-      setActiveTab("general");
       setForm({
-        fullName: "",
-        email: "",
+        userId: "",
         phone: "",
         role: "Doctor",
         gender: "Female",
         specialty: "",
         status: "Active",
       });
-      setShifts([createShift(nextTempId, [], "Monday")]);
+      setError("");
+      setSaving(false);
     }
   }, [open]);
 
@@ -596,75 +711,57 @@ function AddStaffMemberModal({
     setForm((current) => ({ ...current, [field]: value }));
   };
 
-  const validationMessage = getShiftValidationMessage(shifts);
-  const canSave = form.fullName.trim() && form.email.trim() && form.phone.trim() && !validationMessage;
+  const canSave = form.userId.trim() && (form.role === "Staff" || form.specialty.trim());
 
-  const save = () => {
+  const save = async () => {
     if (!canSave) return;
-    const id = `${form.role === "Doctor" ? "DOC" : "STF"}-${Date.now().toString().slice(-6)}`;
-    const profile: BackendStaffProfile = {
-      id,
-      userId: `USR-${Date.now().toString().slice(-6)}`,
-      fullName: form.fullName.trim(),
-      role: form.role,
-      specialty: form.role === "Doctor" ? form.specialty : form.specialty || "Clinic Staff",
-      gender: form.gender,
-      email: form.email.trim(),
-      phone: form.phone.trim(),
-      status: form.status,
-    };
-    const normalizedShifts = sortShifts(shifts).map((shift, index) => ({
-      ...shift,
-      id: shift.id.replace(tempId, id),
-      staffOrDoctorId: id,
-      shiftIndex: index + 1,
-    }));
-    onCreate(profile, normalizedShifts);
-  };
+    setError("");
+    setSaving(true);
 
-  const tabs = [
-    {
-      id: "general",
-      label: "General",
-      content: (
-        <div className="field-grid">
-          <Input label="Full name" value={form.fullName} onChange={(event) => updateForm("fullName", event.target.value)} />
-          <Input label="Email" type="email" value={form.email} onChange={(event) => updateForm("email", event.target.value)} />
-          <Input label="Phone" value={form.phone} onChange={(event) => updateForm("phone", event.target.value)} />
-          <Select label="Gender" options={["Male", "Female"]} value={form.gender} onChange={(event) => updateForm("gender", event.target.value as Gender)} />
-          <Select label="Role" options={["Doctor", "Staff"]} value={form.role} onChange={(event) => updateForm("role", event.target.value as BackendStaffProfile["role"])} />
-          <Select label="Status" options={["Active", "Inactive", "On Leave"]} value={form.status} onChange={(event) => updateForm("status", event.target.value as ProfileStatus)} />
-          <Input className="span-2" label={form.role === "Doctor" ? "Specialization" : "Position"} value={form.specialty} onChange={(event) => updateForm("specialty", event.target.value)} />
-        </div>
-      ),
-    },
-    {
-      id: "hours",
-      label: "Schedule",
-      content: (
-        <div className="stack">
-          <EditableShiftsEditor rows={shifts} staffOrDoctorId={tempId} onRowsChange={setShifts} />
-          {validationMessage && <div className="alert-card">{validationMessage}</div>}
-        </div>
-      ),
-    },
-  ];
+    try {
+      await onCreate({
+        userId: form.userId.trim(),
+        role: form.role,
+        specialty: form.role === "Doctor" ? form.specialty.trim() : form.specialty.trim(),
+        gender: form.gender,
+        status: form.status,
+        phone: form.phone.trim() || undefined,
+      });
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to create employee profile.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <Modal
       title="Add Staff Member"
-      subtitle="Creates local mock staff details for this prototype only."
+      subtitle="Creates an employee profile for an existing backend user."
       open={open}
       onClose={onClose}
       width={960}
       footer={
         <>
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button disabled={!canSave} onClick={save}>Save Staff Member</Button>
+          <Button variant="secondary" disabled={saving} onClick={onClose}>Cancel</Button>
+          <Button disabled={!canSave || saving} onClick={() => { void save(); }}>{saving ? "Saving..." : "Save Staff Member"}</Button>
         </>
       }
     >
-      <Tabs tabs={tabs} activeId={activeTab} onChange={setActiveTab} />
+      <div className="stack">
+        <div className="notice-card">
+          Employee profiles must be linked to an existing backend user. This form does not create login accounts.
+        </div>
+        {error && <div className="alert-card">{error}</div>}
+        <div className="field-grid">
+          <Input label="Existing User ID" required value={form.userId} onChange={(event) => updateForm("userId", event.target.value)} />
+          <Input label="Phone" value={form.phone} onChange={(event) => updateForm("phone", event.target.value)} />
+          <Select label="Gender" options={["Male", "Female"]} value={form.gender} onChange={(event) => updateForm("gender", event.target.value as Gender)} />
+          <Select label="Role" options={["Doctor", "Staff"]} value={form.role} onChange={(event) => updateForm("role", event.target.value as BackendStaffProfile["role"])} />
+          <Select label="Status" options={["Active", "Inactive", "On Leave"]} value={form.status} onChange={(event) => updateForm("status", event.target.value as ProfileStatus)} />
+          <Input className="span-2" label={form.role === "Doctor" ? "Specialization" : "Position"} required={form.role === "Doctor"} value={form.specialty} onChange={(event) => updateForm("specialty", event.target.value)} />
+        </div>
+      </div>
     </Modal>
   );
 }

@@ -527,8 +527,28 @@ describe("detail drawer layout", () => {
     });
   });
 
-  it("places staff profile leave exceptions under the schedule column", () => {
+  it("places staff profile leave exceptions under the schedule column", async () => {
     seedAuthSession();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/employee-profiles/me/")) {
+        return new Response(JSON.stringify({
+          id: "DOC-001",
+          userId: testStaffUser.id,
+          username: testStaffUser.username,
+          fullName: testStaffUser.fullName,
+          email: testStaffUser.email,
+          role: "Staff",
+          status: "Active",
+          specialty: "Reception / Staff",
+          gender: "Female",
+          phone: testStaffUser.phone,
+          avatarUrl: "",
+          version: 1,
+        }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      return new Response(JSON.stringify({ detail: "Not found." }), { headers: { "Content-Type": "application/json" }, status: 404 });
+    }));
 
     render(
       <MemoryRouter>
@@ -537,6 +557,8 @@ describe("detail drawer layout", () => {
         </SessionProvider>
       </MemoryRouter>,
     );
+
+    await screen.findByText("Leave Exceptions");
 
     const profileGrid = document.querySelector(".profile-page-grid");
     const scheduleColumn = document.querySelector(".profile-schedule-column");

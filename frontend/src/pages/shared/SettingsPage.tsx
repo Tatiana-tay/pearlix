@@ -1,3 +1,6 @@
+import { useEffect, useState } from "react";
+import { adaptEmployeeProfileDTO, getCurrentEmployeeProfile } from "../../api/employeeProfiles";
+import { isApiError } from "../../api/errors";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { GroupedShiftsTable } from "../../components/staff/GroupedShiftsTable";
 import { Badge } from "../../components/ui/Badge";
@@ -5,16 +8,62 @@ import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { Input } from "../../components/ui/Input";
 import { Select } from "../../components/ui/Select";
-import { useCurrentUser } from "../../context/SessionContext";
-import { getShiftsForStaffProfile, staffProfiles } from "../../data/adapters";
+import { useCurrentUser, useSession } from "../../context/SessionContext";
+import { getShiftsForStaffProfile } from "../../data/adapters";
+import type { BackendStaffProfile } from "../../types/models";
 import { initials, prettyDate } from "../../utils/format";
 import { loadMockAppointments, loadMockAvailabilityExceptions } from "../../utils/mockScheduleState";
 import { appointmentStatusTone, userStatusTone } from "../../utils/statusStyles";
 
 export function SettingsPage() {
   const currentUser = useCurrentUser();
+  const { accessToken, clearSession } = useSession();
   const isAdmin = currentUser.role === "Admin";
-  const profile = staffProfiles.find((item) => item.userId === currentUser.id);
+  const [profile, setProfile] = useState<BackendStaffProfile | null>(null);
+  const [loadingProfile, setLoadingProfile] = useState(!isAdmin);
+  const [profileError, setProfileError] = useState("");
+
+  useEffect(() => {
+    if (isAdmin) {
+      setLoadingProfile(false);
+      return;
+    }
+    if (!accessToken) {
+      setLoadingProfile(false);
+      setProfileError("Sign in again to view your employee profile.");
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingProfile(true);
+    setProfileError("");
+
+    getCurrentEmployeeProfile({ accessToken })
+      .then((employeeProfile) => {
+        if (!cancelled) {
+          setProfile(adaptEmployeeProfileDTO(employeeProfile));
+        }
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        if (isApiError(error) && error.status === 401) {
+          clearSession("Your session has expired. Please sign in again.");
+        }
+        setProfileError(toEmployeeProfileErrorMessage(error, "Unable to load your employee profile."));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingProfile(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, clearSession, isAdmin]);
+
   const shifts = profile ? getShiftsForStaffProfile(profile.id) : [];
   const appointments = loadMockAppointments();
   const availabilityExceptions = loadMockAvailabilityExceptions();
@@ -31,6 +80,7 @@ export function SettingsPage() {
         title={isAdmin ? "Settings" : "Profile"}
         subtitle={isAdmin ? "Manage clinic system preferences and view your account." : "View your clinic account and schedule information."}
       />
+      {profileError && <div className="alert-card">{profileError}</div>}
       {!isAdmin ? (
         <div className="profile-page-grid">
           <Card className="stack profile-info-card">
@@ -57,7 +107,7 @@ export function SettingsPage() {
           <div className="profile-schedule-column">
             <Card className="stack working-hours-card">
               <h2 className="card-title">Working Hours / Shifts</h2>
-              <GroupedShiftsTable shifts={shifts} />
+              {loadingProfile ? <div className="empty-inline">Loading profile...</div> : <GroupedShiftsTable shifts={shifts} />}
             </Card>
 
             {profile && (
@@ -144,4 +194,19 @@ export function SettingsPage() {
       )}
     </div>
   );
+}
+
+function toEmployeeProfileErrorMessage(error: unknown, fallback: string) {
+  if (isApiError(error)) {
+    return error.message || fallback;
+  }
+
+  if (error instanceof TypeError) {
+    return "Cannot reach the backend. Make sure the backend server is running and try again.";
+  }
+  if (error instanceof Error) {
+    return error.message || fallback;
+  }
+
+  return fallback;
 }

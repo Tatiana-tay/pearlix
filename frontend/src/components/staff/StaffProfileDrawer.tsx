@@ -26,7 +26,7 @@ interface StaffProfileDrawerProps {
   shifts?: BackendShift[];
   appointments?: BackendAppointment[];
   availabilityExceptions?: BackendAvailabilityException[];
-  onSaveProfile?: (staff: BackendStaffProfile) => void;
+  onSaveProfile?: (staff: BackendStaffProfile) => BackendStaffProfile | Promise<BackendStaffProfile> | void | Promise<void>;
   onSaveShifts?: (staffId: string, shifts: BackendShift[]) => void;
   onAddLeave?: (staff: BackendStaffProfile) => void;
   onEditLeave?: (exception: BackendAvailabilityException) => void;
@@ -56,6 +56,8 @@ export function StaffProfileDrawer({
   const [draftShifts, setDraftShifts] = useState<BackendShift[]>(providedShifts ?? []);
   const [activityNote, setActivityNote] = useState("Mock profile activity can be used for schedule notes, onboarding status, and clinic administration reminders.");
   const [selectedAppointment, setSelectedAppointment] = useState<BackendAppointment | null>(null);
+  const [saveError, setSaveError] = useState("");
+  const [savingProfile, setSavingProfile] = useState(false);
 
   const fallbackShifts = useMemo(
     () => staff ? getShiftsForStaffProfile(staff.id) : [],
@@ -74,6 +76,8 @@ export function StaffProfileDrawer({
       setDraftStaff(staff);
       setDraftShifts(profileShifts);
       setActivityNote("Mock profile activity can be used for schedule notes, onboarding status, and clinic administration reminders.");
+      setSaveError("");
+      setSavingProfile(false);
     }
   }, [open, staff, profileShifts]);
 
@@ -91,17 +95,29 @@ export function StaffProfileDrawer({
     setDraftStaff((current) => current ? { ...current, [field]: value } : current);
   };
 
-  const saveChanges = () => {
+  const saveChanges = async () => {
     if (validationMessage) return;
     const savedShifts = sortShifts(draftShifts).map((shift) => ({ ...shift, staffOrDoctorId: draftStaff.id }));
-    onSaveProfile?.(draftStaff);
-    onSaveShifts?.(draftStaff.id, savedShifts);
-    setEditMode(false);
+    setSaveError("");
+    setSavingProfile(true);
+
+    try {
+      const savedProfile = await onSaveProfile?.(draftStaff);
+      const nextProfile = savedProfile ?? draftStaff;
+      onSaveShifts?.(nextProfile.id, savedShifts);
+      setDraftStaff(nextProfile);
+      setEditMode(false);
+    } catch (caughtError) {
+      setSaveError(caughtError instanceof Error ? caughtError.message : "Unable to save profile.");
+    } finally {
+      setSavingProfile(false);
+    }
   };
 
   const cancelChanges = () => {
     setDraftStaff(staff);
     setDraftShifts(profileShifts);
+    setSaveError("");
     setEditMode(false);
   };
 
@@ -276,8 +292,10 @@ export function StaffProfileDrawer({
               <div className="right">
                 {editMode ? (
                   <>
-                    <Button variant="secondary" onClick={cancelChanges}>Cancel</Button>
-                    <Button icon={<Save size={17} />} disabled={Boolean(validationMessage)} onClick={saveChanges}>Save Changes</Button>
+                    <Button variant="secondary" disabled={savingProfile} onClick={cancelChanges}>Cancel</Button>
+                    <Button icon={<Save size={17} />} disabled={Boolean(validationMessage) || savingProfile} onClick={() => { void saveChanges(); }}>
+                      {savingProfile ? "Saving..." : "Save Changes"}
+                    </Button>
                   </>
                 ) : (
                   <Button variant="secondary" icon={<Pencil size={17} />} onClick={() => setEditMode(true)}>Edit</Button>
@@ -285,6 +303,7 @@ export function StaffProfileDrawer({
               </div>
             )}
           </div>
+          {saveError && <div className="alert-card">{saveError}</div>}
           <Tabs tabs={tabs} activeId={activeTab} onChange={setActiveTab} />
         </section>
       </div>

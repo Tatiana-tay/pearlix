@@ -215,6 +215,7 @@ export interface BackendStaffProfile {
   phone: string;
   status: ProfileStatus;
   avatarUrl?: string;
+  version?: number;
 }
 
 export interface BackendShift {
