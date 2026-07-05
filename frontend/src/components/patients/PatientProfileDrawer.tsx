@@ -7,6 +7,7 @@ import {
   listAttachments,
   uploadAttachment,
 } from "../../api/attachments";
+import { adaptAIResultDTO, listAIResults } from "../../api/aiResults";
 import { isApiError } from "../../api/errors";
 import { AppointmentModal } from "../appointments/AppointmentModal";
 import { InvoiceDetails } from "../billing/InvoiceDetails";
@@ -17,10 +18,11 @@ import {
   patients,
 } from "../../data/adapters";
 import { useSession } from "../../context/SessionContext";
-import type { BackendAppointment, BackendAttachment, BackendInvoice, BackendPatient, BackendVisit, Invoice } from "../../types/models";
+import type { BackendAIResult, BackendAppointment, BackendAttachment, BackendInvoice, BackendPatient, BackendVisit, Invoice } from "../../types/models";
 import { ageFromDate, currency, fullPatientName, initials, prettyDate } from "../../utils/format";
 import { loadMockAppointments, loadMockAvailabilityExceptions, saveMockAppointments } from "../../utils/mockScheduleState";
-import { appointmentStatusTone, invoiceStatusTone } from "../../utils/statusStyles";
+import { aiStatusTone, appointmentStatusTone, invoiceStatusTone } from "../../utils/statusStyles";
+import { AiFindingsTable } from "../ai/AiFindingsTable";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Drawer } from "../ui/Drawer";
@@ -74,6 +76,9 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
   const [uploadDescription, setUploadDescription] = useState("");
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const [openingAttachmentId, setOpeningAttachmentId] = useState("");
+  const [aiResults, setAiResults] = useState<BackendAIResult[]>([]);
+  const [aiResultsLoading, setAiResultsLoading] = useState(false);
+  const [aiResultError, setAiResultError] = useState("");
   const [appointmentRows, setAppointmentRows] = useState<BackendAppointment[]>(loadMockAppointments);
   const [appointmentCreateOpen, setAppointmentCreateOpen] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -98,6 +103,9 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
       setUploadDescription("");
       setUploadingAttachment(false);
       setOpeningAttachmentId("");
+      setAiResults([]);
+      setAiResultError("");
+      setAiResultsLoading(false);
       setAppointmentRows(loadMockAppointments());
       setAppointmentCreateOpen(false);
       setSaveError("");
@@ -136,6 +144,37 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
     };
   }, [accessToken, clearSession, open, selectedPatient.patientId]);
 
+  useEffect(() => {
+    if (!open || !accessToken || !selectedPatient.patientId) {
+      return;
+    }
+
+    let cancelled = false;
+    setAiResultsLoading(true);
+    setAiResultError("");
+
+    listAIResults({ patientId: selectedPatient.patientId }, { accessToken })
+      .then((rows) => {
+        if (cancelled) return;
+        setAiResults(rows.map(adaptAIResultDTO));
+        setAiResultError("");
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        handleAttachmentAuthError(error, clearSession);
+        setAiResultError(toAttachmentErrorMessage(error, "Unable to load stored AI results."));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAiResultsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, clearSession, open, selectedPatient.patientId]);
+
   const patientVisits = editMode ? draftVisits : localVisits;
   const patientInvoices = localInvoices;
   const patientAppointments = useMemo(
@@ -146,6 +185,14 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
     const exists = patients.some((item) => item.patientId === selectedPatient.patientId);
     return exists ? patients : [...patients, selectedPatient];
   }, [selectedPatient]);
+  const aiResultsByAttachment = useMemo(() => {
+    const grouped = new Map<string, BackendAIResult[]>();
+    aiResults.forEach((result) => {
+      const key = result.attachmentId ?? result.fileId;
+      grouped.set(key, [...(grouped.get(key) ?? []), result]);
+    });
+    return grouped;
+  }, [aiResults]);
   const uploadSelectedAttachment = async () => {
     if (!accessToken || !uploadFile) {
       setAttachmentError("Choose a file to upload.");
@@ -348,8 +395,12 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
             </div>
           )}
           {attachmentError && <div className="alert-card">{attachmentError}</div>}
+          {aiResultError && <div className="alert-card">{aiResultError}</div>}
           {attachmentsLoading && <div className="empty-inline">Loading attachments...</div>}
+          {aiResultsLoading && <div className="empty-inline">Loading stored AI results...</div>}
           {patientAttachments.map((attachment) => {
+            const storedResults = aiResultsByAttachment.get(attachment.id) ?? [];
+            const latestResult = storedResults[0];
             return (
               <article className="soft-panel" key={attachment.id}>
                 <div className="between">
@@ -360,6 +411,29 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
                   <Badge tone="primary">{attachment.mimeType || attachment.fileType}</Badge>
                 </div>
                 {attachment.description && <p className="muted">{attachment.description}</p>}
+                {latestResult ? (
+                  <div className="stack mt-16">
+                    <div className="between">
+                      <div>
+                        <h3 className="card-title">Stored AI Analysis</h3>
+                        <p className="tiny">Educational / research output only. Not a clinical diagnosis.</p>
+                      </div>
+                      <Badge tone={aiStatusTone[latestResult.status]}>{latestResult.status}</Badge>
+                    </div>
+                    <dl className="detail-list mt-16">
+                      <div><dt>Model</dt><dd>{latestResult.modelName || "Not provided"}</dd></div>
+                      <div><dt>Model Version</dt><dd>{latestResult.modelVersion || "Not provided"}</dd></div>
+                      <div><dt>Processed</dt><dd>{prettyDate(latestResult.processedDate)}</dd></div>
+                      <div><dt>Overall Confidence</dt><dd>{latestResult.overallConfidence ? `${Math.round(latestResult.overallConfidence * 100)}%` : "Not provided"}</dd></div>
+                    </dl>
+                    {latestResult.resultSummary && <p className="muted">{latestResult.resultSummary}</p>}
+                    {latestResult.errorMessage && <div className="alert-card">{latestResult.errorMessage}</div>}
+                    <AiFindingsTable findings={latestResult.findings ?? []} compact />
+                    <div className="notice-card">AI Research Result: educational / research output only. Doctor review is required before any clinical use.</div>
+                  </div>
+                ) : (
+                  <div className="empty-inline">No stored AI result for this attachment.</div>
+                )}
                 <div className="right">
                   {canEdit && (
                     <Button variant="danger" icon={<Trash2 size={16} />} onClick={() => { void removeAttachment(attachment); }}>

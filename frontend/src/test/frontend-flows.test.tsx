@@ -25,6 +25,7 @@ import { SettingsPage } from "../pages/shared/SettingsPage";
 import { routes } from "../routes";
 import { adaptAppointmentDTO, toAppointmentPayload, toAppointmentStatusPayload } from "../api/appointments";
 import { adaptAttachmentDTO, toAttachmentFormData } from "../api/attachments";
+import { adaptAIResultDTO, adaptAIResultFindingDTO } from "../api/aiResults";
 import { adaptAvailabilityExceptionDTO, toAvailabilityExceptionPayload } from "../api/availabilityExceptions";
 import { adaptInvoiceDTO, adaptPaymentDTO, toInvoiceUpdatePayload, toPaymentPayload } from "../api/billing";
 import { adaptWorkingShiftDTO, toWorkingShiftPayload } from "../api/workingShifts";
@@ -1313,6 +1314,9 @@ describe("attachments API integration", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
+      if (url.includes("/api/ai-results/")) {
+        return new Response(JSON.stringify({ results: [] }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
       if (url.includes("/api/attachments/5/original-url/")) {
         return new Response(new Blob(["file"], { type: "image/png" }), { status: 200 });
       }
@@ -1365,6 +1369,9 @@ describe("attachments API integration", () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
+      if (url.includes("/api/ai-results/")) {
+        return new Response(JSON.stringify({ results: [] }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
       if (url.includes("/api/attachments/") && method === "GET") {
         return new Response(JSON.stringify({ results: [] }), { headers: { "Content-Type": "application/json" }, status: 200 });
       }
@@ -1388,6 +1395,167 @@ describe("attachments API integration", () => {
     await user.click(screen.getByRole("button", { name: "Upload" }));
 
     expect(await screen.findByText("content_type: Unsupported file type.")).toBeInTheDocument();
+  });
+});
+
+describe("AI results display integration", () => {
+  const aiResultDto = {
+    id: 9,
+    attachmentId: 5,
+    patientId: 11,
+    patientName: "Backend Patient",
+    visitId: 42,
+    status: "Completed" as const,
+    resultSummary: "Stored result summary",
+    modelName: "DentalResearchNet",
+    modelVersion: "2026.1",
+    overallConfidence: 0.87,
+    overlayUrl: "storage/private/overlay.png",
+    errorMessage: "",
+    findings: [
+      { id: 91, toothFdi: "11", diseaseLabel: "Caries", confidence: 0.92, createdAt: "2026-02-09T09:05:00Z" },
+    ],
+    createdAt: "2026-02-09T09:00:00Z",
+    updatedAt: "2026-02-09T09:05:00Z",
+  };
+
+  it("maps AI result and finding DTOs without billing or raw overlay fields", () => {
+    const result = adaptAIResultDTO(aiResultDto);
+    const finding = adaptAIResultFindingDTO(aiResultDto.findings[0]);
+
+    expect(result).toEqual(expect.objectContaining({
+      analysisId: "9",
+      attachmentId: "5",
+      fileId: "5",
+      patientId: "11",
+      visitId: "42",
+      status: "Completed",
+      resultSummary: "Stored result summary",
+      modelName: "DentalResearchNet",
+      modelVersion: "2026.1",
+      overallConfidence: 0.87,
+      overlayFilePath: "",
+      overlayUrl: "",
+    }));
+    expect(result).not.toHaveProperty("invoice");
+    expect(result).not.toHaveProperty("payment");
+    expect(finding).toEqual(expect.objectContaining({
+      findingId: "91",
+      fdiToothId: "11",
+      diseaseLabel: "Caries",
+      confidenceScore: 0.92,
+    }));
+  });
+
+  it("loads stored AI results in the patient X-rays tab and renders findings", async () => {
+    const user = userEvent.setup();
+    seedAuthSession();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/attachments/") && !url.includes("/ai-results")) {
+        return new Response(JSON.stringify({ results: [{
+          id: 5,
+          patientId: defaultPatient.patientId,
+          visitId: null,
+          uploadedById: 2,
+          uploadedByName: "Olivia Frontdesk",
+          attachmentType: "X-ray",
+          originalFilename: "stored-xray.png",
+          contentType: "image/png",
+          sizeBytes: 1234,
+          fileUrl: "/api/attachments/5/original-url/",
+          description: "",
+          createdAt: "2026-02-09T09:00:00Z",
+        }] }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      if (url.includes("/api/ai-results/")) {
+        return new Response(JSON.stringify({ results: [{ ...aiResultDto, patientId: defaultPatient.patientId }] }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      return new Response(JSON.stringify({ detail: "Not found." }), { headers: { "Content-Type": "application/json" }, status: 404 });
+    }));
+
+    render(
+      <MemoryRouter>
+        <SessionProvider validateStoredSession={false}>
+          <PatientProfileDrawer patient={defaultPatient} open onClose={vi.fn()} />
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "X-rays" }));
+
+    expect(await screen.findByText("Stored AI Analysis")).toBeInTheDocument();
+    expect(screen.getByText("Educational / research output only. Not a clinical diagnosis.")).toBeInTheDocument();
+    expect(screen.getByText("DentalResearchNet")).toBeInTheDocument();
+    expect(screen.getByText("Stored result summary")).toBeInTheDocument();
+    expect(screen.getByText("Caries")).toBeInTheDocument();
+    expect(screen.getByText("92%")).toBeInTheDocument();
+    expect(screen.queryByText("storage/private/overlay.png")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /run ai/i })).not.toBeInTheDocument();
+  });
+
+  it("renders no-result, processing, and failed states from backend data", async () => {
+    const user = userEvent.setup();
+    seedAuthSession();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/attachments/")) {
+        return new Response(JSON.stringify({ results: [
+          { id: 21, patientId: defaultPatient.patientId, visitId: null, uploadedById: 2, uploadedByName: "Olivia", attachmentType: "X-ray", originalFilename: "processing.png", contentType: "image/png", sizeBytes: 1, fileUrl: "/api/attachments/21/original-url/", description: "", createdAt: "2026-02-09T09:00:00Z" },
+          { id: 22, patientId: defaultPatient.patientId, visitId: null, uploadedById: 2, uploadedByName: "Olivia", attachmentType: "X-ray", originalFilename: "failed.png", contentType: "image/png", sizeBytes: 1, fileUrl: "/api/attachments/22/original-url/", description: "", createdAt: "2026-02-09T09:00:00Z" },
+          { id: 23, patientId: defaultPatient.patientId, visitId: null, uploadedById: 2, uploadedByName: "Olivia", attachmentType: "X-ray", originalFilename: "no-result.png", contentType: "image/png", sizeBytes: 1, fileUrl: "/api/attachments/23/original-url/", description: "", createdAt: "2026-02-09T09:00:00Z" },
+        ] }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      if (url.includes("/api/ai-results/")) {
+        return new Response(JSON.stringify({ results: [
+          { ...aiResultDto, id: 31, attachmentId: 21, patientId: defaultPatient.patientId, status: "Processing", findings: [], resultSummary: "" },
+          { ...aiResultDto, id: 32, attachmentId: 22, patientId: defaultPatient.patientId, status: "Failed", findings: [], errorMessage: "Image could not be processed." },
+        ] }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      return new Response(JSON.stringify({ detail: "Not found." }), { headers: { "Content-Type": "application/json" }, status: 404 });
+    }));
+
+    render(
+      <MemoryRouter>
+        <SessionProvider validateStoredSession={false}>
+          <PatientProfileDrawer patient={defaultPatient} open onClose={vi.fn()} />
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "X-rays" }));
+
+    expect(await screen.findByText("Processing")).toBeInTheDocument();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("Image could not be processed.")).toBeInTheDocument();
+    expect(screen.getByText("No stored AI result for this attachment.")).toBeInTheDocument();
+  });
+
+  it("shows AI result permission errors readably", async () => {
+    const user = userEvent.setup();
+    seedAuthSession();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/attachments/")) {
+        return new Response(JSON.stringify({ results: [] }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      if (url.includes("/api/ai-results/")) {
+        return new Response(JSON.stringify({ detail: "You do not have access to AI results." }), { headers: { "Content-Type": "application/json" }, status: 403 });
+      }
+      return new Response(JSON.stringify({ detail: "Not found." }), { headers: { "Content-Type": "application/json" }, status: 404 });
+    }));
+
+    render(
+      <MemoryRouter>
+        <SessionProvider validateStoredSession={false}>
+          <PatientProfileDrawer patient={defaultPatient} open onClose={vi.fn()} />
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "X-rays" }));
+
+    expect(await screen.findByText("You do not have access to AI results.")).toBeInTheDocument();
   });
 });
 
@@ -1507,6 +1675,9 @@ describe("detail drawer layout", () => {
     seedAuthSession();
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes("/api/ai-results/")) {
+        return new Response(JSON.stringify({ results: [] }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
       if (url.includes("/api/attachments/")) {
         return new Response(JSON.stringify({ results: [] }), { headers: { "Content-Type": "application/json" }, status: 200 });
       }

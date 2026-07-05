@@ -335,20 +335,31 @@ export interface BackendAttachment {
 export interface BackendAIResult {
   analysisId: string;
   fileId: string;
+  attachmentId?: string;
+  patientId?: string;
+  patientName?: string;
+  visitId?: string;
   resultSummary: string;
   overallConfidence: number;
   processedDate: string;
+  modelName?: string;
   modelVersion: string;
   status: AIResult["Status"];
   overlayFilePath: string;
+  overlayUrl?: string;
+  errorMessage?: string;
+  findings?: BackendAIResultFinding[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface BackendAIResultFinding {
   findingId: string;
   analysisId: string;
   fdiToothId: string;
-  diseaseLabel: AIResultFinding["Disease_Label"];
+  diseaseLabel: AIResultFinding["Disease_Label"] | string;
   confidenceScore: number;
+  createdAt?: string;
 }
 
 export interface BackendInvoice {
