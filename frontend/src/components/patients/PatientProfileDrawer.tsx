@@ -1,27 +1,29 @@
 import { useEffect, useMemo, useState } from "react";
 import { CalendarPlus, FileUp, Pencil, Save, Trash2 } from "lucide-react";
+import {
+  adaptAttachmentDTO,
+  deleteAttachment as deleteAttachmentRequest,
+  fetchAttachmentOriginalBlob,
+  listAttachments,
+  uploadAttachment,
+} from "../../api/attachments";
+import { isApiError } from "../../api/errors";
 import { AppointmentModal } from "../appointments/AppointmentModal";
 import { InvoiceDetails } from "../billing/InvoiceDetails";
 import {
-  getAIFindingsByAnalysisId,
-  getAIResultByFileId,
-  getAttachmentsForPatient,
   getStaffProfileById,
   getVisitsForPatient,
   invoices,
   patients,
 } from "../../data/adapters";
-import { useCurrentUser } from "../../context/SessionContext";
-import type { BackendAIResult, BackendAIResultFinding, BackendAppointment, BackendAttachment, BackendInvoice, BackendPatient, BackendVisit, Invoice } from "../../types/models";
+import { useSession } from "../../context/SessionContext";
+import type { BackendAppointment, BackendAttachment, BackendInvoice, BackendPatient, BackendVisit, Invoice } from "../../types/models";
 import { ageFromDate, currency, fullPatientName, initials, prettyDate } from "../../utils/format";
 import { loadMockAppointments, loadMockAvailabilityExceptions, saveMockAppointments } from "../../utils/mockScheduleState";
-import { aiStatusTone, appointmentStatusTone, invoiceStatusTone } from "../../utils/statusStyles";
-import { AiFindingsTable } from "../ai/AiFindingsTable";
-import { XrayViewer } from "../ai/XrayViewer";
+import { appointmentStatusTone, invoiceStatusTone } from "../../utils/statusStyles";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Drawer } from "../ui/Drawer";
-import { Modal } from "../ui/Modal";
 import { Select } from "../ui/Select";
 import { Tabs } from "../ui/Tabs";
 import { Textarea } from "../ui/Textarea";
@@ -54,7 +56,7 @@ const blankPatient: BackendPatient = {
 };
 
 export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, readOnlyBilling = false, onSavePatient }: PatientProfileDrawerProps) {
-  const currentUser = useCurrentUser();
+  const { accessToken, clearSession, currentUser } = useSession();
   const [activeTab, setActiveTab] = useState("general");
   const [editMode, setEditMode] = useState(false);
   const [localPatient, setLocalPatient] = useState<BackendPatient>(patient ?? blankPatient);
@@ -65,16 +67,20 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
   const [selectedInvoice, setSelectedInvoice] = useState<BackendInvoice | null>(null);
   const [lastInvoiceTap, setLastInvoiceTap] = useState<{ id: string; at: number } | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
-  const [mockUploads, setMockUploads] = useState<BackendAttachment[]>([]);
-  const [deletedAttachmentIds, setDeletedAttachmentIds] = useState<string[]>([]);
-  const [viewerPayload, setViewerPayload] = useState<{ result: BackendAIResult; findings: BackendAIResultFinding[] } | null>(null);
+  const [patientAttachments, setPatientAttachments] = useState<BackendAttachment[]>([]);
+  const [attachmentsLoading, setAttachmentsLoading] = useState(false);
+  const [attachmentError, setAttachmentError] = useState("");
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadDescription, setUploadDescription] = useState("");
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [openingAttachmentId, setOpeningAttachmentId] = useState("");
   const [appointmentRows, setAppointmentRows] = useState<BackendAppointment[]>(loadMockAppointments);
   const [appointmentCreateOpen, setAppointmentCreateOpen] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [savingPatient, setSavingPatient] = useState(false);
   const selectedPatient = editMode ? draftPatient : localPatient;
   const patientName = fullPatientName(selectedPatient) || "Patient";
-  const canCreateAppointments = currentUser.role === "Staff";
+  const canCreateAppointments = currentUser?.role === "Staff";
 
   useEffect(() => {
     if (open) {
@@ -86,13 +92,49 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
       setLocalInvoices(invoices.filter((invoice) => invoice.patientId === (patient ?? blankPatient).patientId));
       setSelectedInvoice(null);
       setUploadOpen(false);
-      setViewerPayload(null);
+      setPatientAttachments([]);
+      setAttachmentError("");
+      setUploadFile(null);
+      setUploadDescription("");
+      setUploadingAttachment(false);
+      setOpeningAttachmentId("");
       setAppointmentRows(loadMockAppointments());
       setAppointmentCreateOpen(false);
       setSaveError("");
       setSavingPatient(false);
     }
   }, [open, patient?.patientId]);
+
+  useEffect(() => {
+    if (!open || !accessToken || !selectedPatient.patientId) {
+      return;
+    }
+
+    let cancelled = false;
+    setAttachmentsLoading(true);
+    setAttachmentError("");
+
+    listAttachments({ patientId: selectedPatient.patientId, attachmentType: "X-ray" }, { accessToken })
+      .then((rows) => {
+        if (cancelled) return;
+        setPatientAttachments(rows.map(adaptAttachmentDTO));
+        setAttachmentError("");
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        handleAttachmentAuthError(error, clearSession);
+        setAttachmentError(toAttachmentErrorMessage(error, "Unable to load attachments."));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAttachmentsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, clearSession, open, selectedPatient.patientId]);
 
   const patientVisits = editMode ? draftVisits : localVisits;
   const patientInvoices = localInvoices;
@@ -104,29 +146,31 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
     const exists = patients.some((item) => item.patientId === selectedPatient.patientId);
     return exists ? patients : [...patients, selectedPatient];
   }, [selectedPatient]);
-  const patientAttachments = useMemo(
-    () => [
-      ...getAttachmentsForPatient(selectedPatient.patientId),
-      ...mockUploads.filter((attachment) => attachment.patientId === selectedPatient.patientId),
-    ].filter((attachment) => !deletedAttachmentIds.includes(attachment.id)),
-    [deletedAttachmentIds, mockUploads, selectedPatient.patientId],
-  );
+  const uploadSelectedAttachment = async () => {
+    if (!accessToken || !uploadFile) {
+      setAttachmentError("Choose a file to upload.");
+      return;
+    }
 
-  const addMockUpload = () => {
-    setMockUploads((current) => [
-      ...current,
-      {
-        id: `FILE-MOCK-${current.length + 1}`,
+    setUploadingAttachment(true);
+    setAttachmentError("");
+    try {
+      const created = adaptAttachmentDTO(await uploadAttachment({
         patientId: selectedPatient.patientId,
-        visitId: patientVisits[0]?.id ?? "VIS-MOCK",
-        filePath: "local-mock-upload.dcm",
-        fileName: "local-mock-upload.dcm",
-        fileType: "Mock Uploaded X-ray",
-        uploadedBy: patientVisits[0]?.doctorId ?? "DOC-001",
-        uploadedAt: "2026-02-09",
-      },
-    ]);
-    setUploadOpen(false);
+        file: uploadFile,
+        attachmentType: "X-ray",
+        description: uploadDescription,
+      }, { accessToken }));
+      setPatientAttachments((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+      setUploadFile(null);
+      setUploadDescription("");
+      setUploadOpen(false);
+    } catch (error) {
+      handleAttachmentAuthError(error, clearSession);
+      setAttachmentError(toAttachmentErrorMessage(error, "Unable to upload attachment."));
+    } finally {
+      setUploadingAttachment(false);
+    }
   };
 
   const updateDraftVisit = (visitId: string, field: keyof Pick<BackendVisit, "symptomsChiefComplaint" | "diagnosisNotes" | "treatmentNotes" | "clinicalNotes">, value: string) => {
@@ -170,14 +214,39 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
     });
   };
 
-  const deleteAttachment = (attachment: BackendAttachment) => {
-    if (!window.confirm(`Delete ${attachment.fileType}? This removes the local mock X-ray and linked viewer action.`)) {
+  const removeAttachment = async (attachment: BackendAttachment) => {
+    if (!accessToken || !window.confirm(`Delete ${attachment.fileName}? This removes the attachment from the backend.`)) {
       return;
     }
-    setMockUploads((current) => current.filter((item) => item.id !== attachment.id));
-    setDeletedAttachmentIds((current) => [...current, attachment.id]);
-    if (viewerPayload?.result.fileId === attachment.id) {
-      setViewerPayload(null);
+
+    setAttachmentError("");
+    try {
+      await deleteAttachmentRequest(attachment.id, { accessToken });
+      setPatientAttachments((current) => current.filter((item) => item.id !== attachment.id));
+    } catch (error) {
+      handleAttachmentAuthError(error, clearSession);
+      setAttachmentError(toAttachmentErrorMessage(error, "Unable to delete attachment."));
+    }
+  };
+
+  const openAttachment = async (attachment: BackendAttachment) => {
+    if (!accessToken) {
+      setAttachmentError("Sign in again to open this attachment.");
+      return;
+    }
+
+    setOpeningAttachmentId(attachment.id);
+    setAttachmentError("");
+    try {
+      const blob = await fetchAttachmentOriginalBlob(attachment.id, { accessToken });
+      const objectUrl = URL.createObjectURL(blob);
+      window.open(objectUrl, "_blank", "noopener,noreferrer");
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (error) {
+      handleAttachmentAuthError(error, clearSession);
+      setAttachmentError(toAttachmentErrorMessage(error, "Unable to open attachment."));
+    } finally {
+      setOpeningAttachmentId("");
     }
   };
 
@@ -268,50 +337,47 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
             <div className="soft-panel upload-card">
               <span className="stat-icon"><FileUp size={22} /></span>
               <div>
-                <h3 className="card-title">Mock X-ray upload</h3>
-                <p className="muted">Supported: PNG, JPG, JPEG, or DICOM placeholder files.</p>
-                <input type="file" accept=".png,.jpg,.jpeg,.dcm" />
-                <div className="progress-bar"><span style={{ width: "72%" }} /></div>
-                <p className="tiny">Mock progress only. No file leaves this prototype.</p>
+                <h3 className="card-title">X-ray upload</h3>
+                <p className="muted">Supported: PNG, JPG, JPEG, WEBP, PDF, or DICOM files up to 10 MB.</p>
+                <input type="file" accept=".png,.jpg,.jpeg,.webp,.pdf,.dcm,.dicom" onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)} />
+                <Textarea label="Description" value={uploadDescription} onChange={(event) => setUploadDescription(event.target.value)} />
               </div>
-              <Button type="button" onClick={addMockUpload}>Add Upload</Button>
+              <Button type="button" disabled={uploadingAttachment} onClick={() => { void uploadSelectedAttachment(); }}>
+                {uploadingAttachment ? "Uploading..." : "Upload"}
+              </Button>
             </div>
           )}
+          {attachmentError && <div className="alert-card">{attachmentError}</div>}
+          {attachmentsLoading && <div className="empty-inline">Loading attachments...</div>}
           {patientAttachments.map((attachment) => {
-            const aiResult = getAIResultByFileId(attachment.id);
-            const findings = aiResult
-              ? getAIFindingsByAnalysisId(aiResult.analysisId).slice(0, 3)
-              : [];
             return (
               <article className="soft-panel" key={attachment.id}>
                 <div className="between">
                   <div>
-                    <h3 className="card-title">{attachment.fileType}</h3>
-                    <p className="tiny">Uploaded {prettyDate(attachment.uploadedAt)}</p>
+                    <h3 className="card-title">{attachment.fileName}</h3>
+                    <p className="tiny">{attachment.fileType} - Uploaded {prettyDate(attachment.uploadedAt)}</p>
                   </div>
-                  {aiResult && <Badge tone={aiStatusTone[aiResult.status]}>{aiResult.status}</Badge>}
+                  <Badge tone="primary">{attachment.mimeType || attachment.fileType}</Badge>
                 </div>
-                {aiResult && <p className="muted">{aiResult.resultSummary}</p>}
-                <AiFindingsTable findings={findings} compact />
-                {editMode && canEdit && <Textarea label="Doctor review note" placeholder="Add a local mock note about this image." />}
+                {attachment.description && <p className="muted">{attachment.description}</p>}
                 <div className="right">
                   {canEdit && (
-                    <Button variant="danger" icon={<Trash2 size={16} />} onClick={() => deleteAttachment(attachment)}>
+                    <Button variant="danger" icon={<Trash2 size={16} />} onClick={() => { void removeAttachment(attachment); }}>
                       Delete X-ray
                     </Button>
                   )}
                   <Button
                     variant="secondary"
-                    disabled={!aiResult}
-                    onClick={() => aiResult && setViewerPayload({ result: aiResult, findings })}
+                    disabled={openingAttachmentId === attachment.id}
+                    onClick={() => { void openAttachment(attachment); }}
                   >
-                    {aiResult ? "Open X-ray Viewer" : "No viewer available"}
+                    {openingAttachmentId === attachment.id ? "Opening..." : "Open / Download"}
                   </Button>
                 </div>
               </article>
             );
           })}
-          {patientAttachments.length === 0 && <div className="empty-inline">No X-rays uploaded for this patient.</div>}
+          {!attachmentsLoading && patientAttachments.length === 0 && <div className="empty-inline">No X-rays uploaded for this patient.</div>}
         </div>
       ),
     },
@@ -451,15 +517,6 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
         </section>
       </div>
     </Drawer>
-    <Modal
-      title="X-ray Viewer"
-      subtitle={viewerPayload?.result.modelVersion}
-      open={Boolean(viewerPayload)}
-      onClose={() => setViewerPayload(null)}
-      width={1080}
-    >
-      {viewerPayload && <XrayViewer result={viewerPayload.result} findings={viewerPayload.findings} />}
-    </Modal>
     <InvoiceDetails
       invoice={selectedInvoice}
       open={Boolean(selectedInvoice)}
@@ -483,6 +540,41 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
     />
     </>
   );
+}
+
+function handleAttachmentAuthError(error: unknown, clearSession: (message?: string) => void) {
+  if (isApiError(error) && error.status === 401) {
+    clearSession("Your session has expired. Please sign in again.");
+  }
+}
+
+function toAttachmentErrorMessage(error: unknown, fallback: string) {
+  if (isApiError(error)) {
+    const validationMessage = formatAttachmentValidationErrors(error.validationErrors);
+    if (validationMessage) {
+      return validationMessage;
+    }
+    if (error.status === 403) {
+      return error.message || "You do not have permission to manage this attachment.";
+    }
+    return error.message || fallback;
+  }
+  if (error instanceof TypeError) {
+    return "Cannot reach the backend. Make sure the backend server is running and try again.";
+  }
+  if (error instanceof Error) {
+    return error.message || fallback;
+  }
+  return fallback;
+}
+
+function formatAttachmentValidationErrors(errors: Record<string, string[]> | undefined) {
+  if (!errors) {
+    return "";
+  }
+  return Object.entries(errors)
+    .map(([field, messages]) => `${field}: ${messages.join(" ")}`)
+    .join(" ");
 }
 
 export const defaultPatient = patients[0];

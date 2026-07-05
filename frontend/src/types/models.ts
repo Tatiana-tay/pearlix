@@ -315,12 +315,21 @@ export interface BackendVisit {
 export interface BackendAttachment {
   id: string;
   patientId: string;
+  patientName?: string;
   visitId: string;
   filePath: string;
   fileName: string;
   fileType: string;
+  mimeType?: string;
+  fileSize?: number;
+  fileUrl?: string;
+  description?: string;
   uploadedBy: string;
+  uploadedById?: string;
+  uploadedByName?: string;
   uploadedAt: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface BackendAIResult {

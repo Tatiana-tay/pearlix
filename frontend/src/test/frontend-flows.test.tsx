@@ -24,11 +24,12 @@ import { PatientsPage } from "../pages/staff/PatientsPage";
 import { SettingsPage } from "../pages/shared/SettingsPage";
 import { routes } from "../routes";
 import { adaptAppointmentDTO, toAppointmentPayload, toAppointmentStatusPayload } from "../api/appointments";
+import { adaptAttachmentDTO, toAttachmentFormData } from "../api/attachments";
 import { adaptAvailabilityExceptionDTO, toAvailabilityExceptionPayload } from "../api/availabilityExceptions";
 import { adaptInvoiceDTO, adaptPaymentDTO, toInvoiceUpdatePayload, toPaymentPayload } from "../api/billing";
 import { adaptWorkingShiftDTO, toWorkingShiftPayload } from "../api/workingShifts";
 import { adaptVisitDTO, toVisitNotesPayload } from "../api/visits";
-import type { BackendAIResult, BackendAppointment, BackendAvailabilityException, BackendInvoice, BackendPatient, BackendShift, BackendStaffProfile, User } from "../types/models";
+import type { BackendAIResult, BackendAppointment, BackendAttachment, BackendAvailabilityException, BackendInvoice, BackendPatient, BackendShift, BackendStaffProfile, User } from "../types/models";
 import { addMinutes, intervalsOverlap, isDoctorAvailableForInterval, toDateTime } from "../utils/availability";
 import { ageFromDate } from "../utils/format";
 import { calculateInvoiceStatus, loadMockPatients, saveMockPatients } from "../utils/mockClinicState";
@@ -1244,6 +1245,152 @@ describe("invoice details cancelled state", () => {
   });
 });
 
+describe("attachments API integration", () => {
+  const attachmentDto = {
+    id: 5,
+    patientId: 11,
+    patientName: "Backend Patient",
+    visitId: 42,
+    uploadedById: 2,
+    uploadedByName: "Olivia Frontdesk",
+    attachmentType: "X-ray" as const,
+    originalFilename: "bitewing.png",
+    contentType: "image/png",
+    sizeBytes: 1234,
+    fileUrl: "http://127.0.0.1:8000/api/attachments/5/original-url/",
+    description: "Initial upload",
+    createdAt: "2026-02-09T09:00:00Z",
+  };
+
+  it("maps backend attachment DTOs without exposing raw storage paths", () => {
+    const attachment = adaptAttachmentDTO(attachmentDto);
+
+    expect(attachment).toEqual(expect.objectContaining<Partial<BackendAttachment>>({
+      id: "5",
+      patientId: "11",
+      visitId: "42",
+      fileName: "bitewing.png",
+      fileType: "X-ray",
+      mimeType: "image/png",
+      fileSize: 1234,
+      fileUrl: "http://127.0.0.1:8000/api/attachments/5/original-url/",
+      uploadedByName: "Olivia Frontdesk",
+      uploadedAt: "2026-02-09T09:00:00Z",
+    }));
+    expect(attachment.filePath).toBe("");
+  });
+
+  it("builds multipart upload payload with confirmed attachment fields only", () => {
+    const file = new File(["xray"], "bitewing.png", { type: "image/png" });
+    const formData = toAttachmentFormData({
+      patientId: 11,
+      visitId: 42,
+      file,
+      attachmentType: "X-ray",
+      description: "Diagnostic image",
+    });
+
+    expect(formData).toBeInstanceOf(FormData);
+    expect(formData.get("patientId")).toBe("11");
+    expect(formData.get("visitId")).toBe("42");
+    expect(formData.get("attachmentType")).toBe("X-ray");
+    expect(formData.get("description")).toBe("Diagnostic image");
+    expect(formData.get("file")).toBe(file);
+    expect(formData.has("aiResult")).toBe(false);
+    expect(formData.has("diagnosis")).toBe(false);
+    expect(formData.has("invoice")).toBe(false);
+    expect(formData.has("filePath")).toBe(false);
+  });
+
+  it("loads patient attachments, uploads immediately, and opens through the authorized endpoint", async () => {
+    const user = userEvent.setup();
+    seedAuthSession();
+    const openMock = vi.fn();
+    const objectUrlMock = vi.fn(() => "blob:attachment-preview");
+    vi.stubGlobal("open", openMock);
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: objectUrlMock });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/api/attachments/5/original-url/")) {
+        return new Response(new Blob(["file"], { type: "image/png" }), { status: 200 });
+      }
+      if (url.includes("/api/attachments/") && method === "GET") {
+        return new Response(JSON.stringify({ results: [attachmentDto] }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      if (url.endsWith("/api/attachments/") && method === "POST") {
+        expect(init?.body).toBeInstanceOf(FormData);
+        const formData = init?.body as FormData;
+        expect(formData.get("file")).toBeInstanceOf(File);
+        expect(formData.has("aiResult")).toBe(false);
+        return new Response(JSON.stringify({
+          ...attachmentDto,
+          id: 6,
+          originalFilename: "new-xray.png",
+          sizeBytes: 2345,
+          createdAt: "2026-02-10T09:00:00Z",
+        }), { headers: { "Content-Type": "application/json" }, status: 201 });
+      }
+      return new Response(JSON.stringify({ detail: "Not found." }), { headers: { "Content-Type": "application/json" }, status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter>
+        <SessionProvider validateStoredSession={false}>
+          <PatientProfileDrawer patient={defaultPatient} open onClose={vi.fn()} />
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "X-rays" }));
+    expect(await screen.findByText("bitewing.png")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Upload X-ray" }));
+    await user.upload(document.querySelector("input[type='file']") as HTMLInputElement, new File(["new"], "new-xray.png", { type: "image/png" }));
+    await user.click(screen.getByRole("button", { name: "Upload" }));
+
+    expect(await screen.findByText("new-xray.png")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input, init]) => String(input).includes("/api/attachments/") && ((init as RequestInit | undefined)?.method ?? "GET") === "GET")).toHaveLength(1);
+
+    await user.click(screen.getAllByRole("button", { name: "Open / Download" })[1]);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/attachments/5/original-url/"), expect.any(Object)));
+    expect(openMock).toHaveBeenCalledWith("blob:attachment-preview", "_blank", "noopener,noreferrer");
+  });
+
+  it("shows backend attachment validation and permission errors readably", async () => {
+    const user = userEvent.setup();
+    seedAuthSession();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/api/attachments/") && method === "GET") {
+        return new Response(JSON.stringify({ results: [] }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      if (url.endsWith("/api/attachments/") && method === "POST") {
+        return new Response(JSON.stringify({ content_type: ["Unsupported file type."] }), { headers: { "Content-Type": "application/json" }, status: 400 });
+      }
+      return new Response(JSON.stringify({ detail: "You do not have access to this attachment." }), { headers: { "Content-Type": "application/json" }, status: 403 });
+    }));
+
+    render(
+      <MemoryRouter>
+        <SessionProvider validateStoredSession={false}>
+          <PatientProfileDrawer patient={defaultPatient} open onClose={vi.fn()} />
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "X-rays" }));
+    await user.click(screen.getByRole("button", { name: "Upload X-ray" }));
+    await user.upload(document.querySelector("input[type='file']") as HTMLInputElement, new File(["bad"], "bad.png", { type: "image/png" }));
+    await user.click(screen.getByRole("button", { name: "Upload" }));
+
+    expect(await screen.findByText("content_type: Unsupported file type.")).toBeInTheDocument();
+  });
+});
+
 describe("admin navigation and users", () => {
   it("removes Roles & Permissions from admin navigation and routes", () => {
     expect(navConfig.Admin.map((item) => item.label)).not.toContain("Roles & Permissions");
@@ -1358,6 +1505,13 @@ describe("detail drawer layout", () => {
 
   it("uses the same wide detail drawer pattern for patient records", () => {
     seedAuthSession();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/attachments/")) {
+        return new Response(JSON.stringify({ results: [] }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      return new Response(JSON.stringify({ detail: "Not found." }), { headers: { "Content-Type": "application/json" }, status: 404 });
+    }));
     render(
       <MemoryRouter>
         <SessionProvider validateStoredSession={false}>
