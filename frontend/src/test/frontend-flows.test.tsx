@@ -6,6 +6,7 @@ import { MemoryRouter } from "react-router-dom";
 import { XrayViewer } from "../components/ai/XrayViewer";
 import { InvoiceDetails } from "../components/billing/InvoiceDetails";
 import { PaymentModal } from "../components/billing/PaymentModal";
+import { PatientCreateModal } from "../components/patients/PatientCreateModal";
 import { PatientProfileDrawer, defaultPatient } from "../components/patients/PatientProfileDrawer";
 import { GroupedShiftsTable } from "../components/staff/GroupedShiftsTable";
 import { StaffProfileDrawer } from "../components/staff/StaffProfileDrawer";
@@ -269,6 +270,58 @@ describe("appointment scheduling logic", () => {
 });
 
 describe("mock persistence and billing calculations", () => {
+  it("sends optional patient email when creating a backend patient", async () => {
+    const user = userEvent.setup();
+    const onCreate = vi.fn();
+
+    render(<PatientCreateModal open onClose={vi.fn()} onCreate={onCreate} />);
+
+    await user.type(screen.getByLabelText("First Name"), "Email");
+    await user.type(screen.getByLabelText("Last Name"), "Patient");
+    await user.type(screen.getByLabelText("National ID / Passport"), "NID-EMAIL");
+    fireEvent.change(screen.getByLabelText("Date of Birth"), { target: { value: "1990-01-01" } });
+    await user.type(screen.getByLabelText("Phone Number"), "0999999999");
+    await user.type(screen.getByLabelText("Email"), "email.patient@example.com");
+    await user.type(screen.getByLabelText("Emergency Contact"), "Emergency 0999999998");
+    await user.type(screen.getByLabelText("Address"), "123 Email Street");
+    await user.type(screen.getByLabelText("Insurance Info"), "Policy EMAIL");
+    await user.type(screen.getByLabelText("Medical Conditions History"), "None");
+    await user.click(screen.getByRole("button", { name: "Create Patient" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+        email: "email.patient@example.com",
+        gender: "Male",
+      }));
+    });
+    expect(onCreate.mock.calls[0][0]).not.toHaveProperty("sex");
+  });
+
+  it("allows backend-optional patient fields to remain blank without sending literal null", async () => {
+    const user = userEvent.setup();
+    const onCreate = vi.fn();
+
+    render(<PatientCreateModal open onClose={vi.fn()} onCreate={onCreate} />);
+
+    await user.type(screen.getByLabelText("First Name"), "Blank");
+    await user.type(screen.getByLabelText("Last Name"), "Optional");
+    await user.type(screen.getByLabelText("National ID / Passport"), "NID-BLANK");
+    fireEvent.change(screen.getByLabelText("Date of Birth"), { target: { value: "1990-01-01" } });
+    await user.type(screen.getByLabelText("Phone Number"), "0999999999");
+    await user.click(screen.getByRole("button", { name: "Create Patient" }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    const payload = onCreate.mock.calls[0][0];
+    expect(payload).toEqual(expect.objectContaining({
+      address: "",
+      bloodGroup: "",
+      emergencyContact: "",
+      insuranceInfo: "",
+      medicalConditionsHistory: "",
+    }));
+    expect(JSON.stringify(payload)).not.toContain("null");
+  });
+
   it("renders backend patient list results without showing a backend reachability error", async () => {
     seedAuthSession();
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {

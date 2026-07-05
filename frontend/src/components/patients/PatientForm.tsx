@@ -10,7 +10,7 @@ interface PatientFormProps {
   onChange?: (patient: BackendPatient) => void;
 }
 
-const bloodGroups = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
+const bloodGroups = ["", "A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 
 export function PatientForm({ patient, editable = false, onChange }: PatientFormProps) {
   const updateField = (field: keyof BackendPatient, value: string) => {
@@ -65,7 +65,7 @@ export function PatientForm({ patient, editable = false, onChange }: PatientForm
         <h3 className="card-title">Personal Identification</h3>
         <div className="field-grid mt-16">
           <Input label="Patient ID" value={patient.patientId} readOnly />
-          <Select label="Blood Group" options={bloodGroups} value={patient.bloodGroup || "O+"} onChange={(event) => updateField("bloodGroup", event.target.value)} />
+          <Select label="Blood Group" options={bloodGroups} value={patient.bloodGroup ?? ""} onChange={(event) => updateField("bloodGroup", event.target.value)} />
           <Input label="First Name" value={patient.firstName} onChange={(event) => updateField("firstName", event.target.value)} />
           <Input label="Last Name" value={patient.lastName} onChange={(event) => updateField("lastName", event.target.value)} />
           <Input label="National ID / Passport" value={patient.nationalIdOrPassport} onChange={(event) => updateField("nationalIdOrPassport", event.target.value)} />

@@ -15,7 +15,7 @@ interface PatientCreateModalProps {
   onCreate: (patient: PatientPayload) => Promise<void> | void;
 }
 
-const bloodGroups = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
+const bloodGroups = ["", "A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 
 const emptyForm = {
   firstName: "",
@@ -24,7 +24,8 @@ const emptyForm = {
   dateOfBirth: "",
   gender: "Male" as Gender,
   phoneNumber: "",
-  bloodGroup: "O+",
+  email: "",
+  bloodGroup: "",
   medicalConditionsHistory: "",
   insuranceInfo: "",
   emergencyContact: "",
@@ -48,6 +49,8 @@ export function PatientCreateModal({ open, onClose, onCreate }: PatientCreateMod
     setForm((current) => ({ ...current, [field]: value }));
   };
 
+  const optionalValue = (value: string) => value.trim();
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError("");
@@ -58,14 +61,15 @@ export function PatientCreateModal({ open, onClose, onCreate }: PatientCreateMod
         firstName: form.firstName,
         lastName: form.lastName,
         nationalIdOrPassport: form.nationalIdOrPassport,
-        dateOfBirth: form.dateOfBirth,
+        dateOfBirth: form.dateOfBirth || undefined,
         gender: form.gender,
-        phoneNumber: form.phoneNumber,
-        medicalConditionsHistory: form.medicalConditionsHistory,
+        phoneNumber: optionalValue(form.phoneNumber),
+        email: optionalValue(form.email) || undefined,
+        medicalConditionsHistory: optionalValue(form.medicalConditionsHistory),
         bloodGroup: form.bloodGroup,
-        insuranceInfo: form.insuranceInfo,
-        emergencyContact: form.emergencyContact,
-        address: form.address,
+        insuranceInfo: optionalValue(form.insuranceInfo),
+        emergencyContact: optionalValue(form.emergencyContact),
+        address: optionalValue(form.address),
       });
       onClose();
     } catch (caughtError) {
@@ -99,7 +103,7 @@ export function PatientCreateModal({ open, onClose, onCreate }: PatientCreateMod
             <Input label="First Name" required value={form.firstName} onChange={(event) => updateField("firstName", event.target.value)} />
             <Input label="Last Name" required value={form.lastName} onChange={(event) => updateField("lastName", event.target.value)} />
             <Input label="National ID / Passport" required value={form.nationalIdOrPassport} onChange={(event) => updateField("nationalIdOrPassport", event.target.value)} />
-            <Input label="Date of Birth" required type="date" value={form.dateOfBirth} onChange={(event) => updateField("dateOfBirth", event.target.value)} />
+            <Input label="Date of Birth" type="date" value={form.dateOfBirth} onChange={(event) => updateField("dateOfBirth", event.target.value)} />
             <Input label="Age" value={calculatedAge} readOnly />
             <Select label="Sex" options={["Male", "Female"]} value={form.gender} onChange={(event) => updateField("gender", event.target.value as Gender)} />
           </div>
@@ -108,9 +112,10 @@ export function PatientCreateModal({ open, onClose, onCreate }: PatientCreateMod
         <section className="soft-panel">
           <h3 className="card-title">Contact Information</h3>
           <div className="field-grid mt-16">
-            <Input label="Phone Number" required value={form.phoneNumber} onChange={(event) => updateField("phoneNumber", event.target.value)} />
-            <Input className="span-2" label="Emergency Contact" required value={form.emergencyContact} onChange={(event) => updateField("emergencyContact", event.target.value)} />
-            <Input className="span-2" label="Address" required value={form.address} onChange={(event) => updateField("address", event.target.value)} />
+            <Input label="Phone Number" value={form.phoneNumber} onChange={(event) => updateField("phoneNumber", event.target.value)} />
+            <Input label="Email" type="email" value={form.email} onChange={(event) => updateField("email", event.target.value)} />
+            <Input className="span-2" label="Emergency Contact" value={form.emergencyContact} onChange={(event) => updateField("emergencyContact", event.target.value)} />
+            <Input className="span-2" label="Address" value={form.address} onChange={(event) => updateField("address", event.target.value)} />
           </div>
         </section>
 
@@ -118,8 +123,8 @@ export function PatientCreateModal({ open, onClose, onCreate }: PatientCreateMod
           <h3 className="card-title">Medical / Administrative Information</h3>
           <div className="field-grid mt-16">
             <Select label="Blood Group" options={bloodGroups} value={form.bloodGroup} onChange={(event) => updateField("bloodGroup", event.target.value)} />
-            <Input label="Insurance Info" required value={form.insuranceInfo} onChange={(event) => updateField("insuranceInfo", event.target.value)} />
-            <Textarea className="span-2" label="Medical Conditions History" required value={form.medicalConditionsHistory} onChange={(event) => updateField("medicalConditionsHistory", event.target.value)} />
+            <Input label="Insurance Info" value={form.insuranceInfo} onChange={(event) => updateField("insuranceInfo", event.target.value)} />
+            <Textarea className="span-2" label="Medical Conditions History" value={form.medicalConditionsHistory} onChange={(event) => updateField("medicalConditionsHistory", event.target.value)} />
           </div>
         </section>
       </form>

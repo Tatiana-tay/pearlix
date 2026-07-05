@@ -9,8 +9,8 @@ export interface PatientDTO {
   lastName: string;
   fullName?: string;
   gender: Gender;
-  dateOfBirth: string;
-  age: number;
+  dateOfBirth?: string | null;
+  age?: number | null;
   phoneNumber: string;
   email?: string;
   nationalIdOrPassport?: string;
@@ -28,15 +28,15 @@ export interface PatientPayload {
   firstName: string;
   lastName: string;
   gender: Gender;
-  dateOfBirth: string;
-  phoneNumber: string;
+  dateOfBirth?: string | null;
+  phoneNumber?: string;
   email?: string;
   nationalIdOrPassport: string;
-  address: string;
-  medicalConditionsHistory: string;
-  bloodGroup: string;
-  insuranceInfo: string;
-  emergencyContact: string;
+  address?: string;
+  medicalConditionsHistory?: string;
+  bloodGroup?: string;
+  insuranceInfo?: string;
+  emergencyContact?: string;
 }
 
 export interface PatientUpdatePayload extends Partial<PatientPayload> {
@@ -76,8 +76,8 @@ export function adaptPatientDTO(patient: PatientDTO): BackendPatient {
     lastName: patient.lastName,
     fullName: patient.fullName,
     nationalIdOrPassport: patient.nationalIdOrPassport ?? "",
-    dateOfBirth: patient.dateOfBirth,
-    age: patient.age,
+    dateOfBirth: patient.dateOfBirth ?? "",
+    age: patient.age ?? undefined,
     gender: patient.gender,
     phoneNumber: patient.phoneNumber,
     medicalConditionsHistory: patient.medicalConditionsHistory ?? "",
