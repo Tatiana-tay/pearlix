@@ -33,7 +33,7 @@ interface PatientProfileDrawerProps {
   patient: BackendPatient | null;
   canEdit?: boolean;
   readOnlyBilling?: boolean;
-  onSavePatient?: (patient: BackendPatient) => void;
+  onSavePatient?: (patient: BackendPatient) => BackendPatient | Promise<BackendPatient> | void | Promise<void>;
 }
 
 const blankPatient: BackendPatient = {
@@ -70,6 +70,8 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
   const [viewerPayload, setViewerPayload] = useState<{ result: BackendAIResult; findings: BackendAIResultFinding[] } | null>(null);
   const [appointmentRows, setAppointmentRows] = useState<BackendAppointment[]>(loadMockAppointments);
   const [appointmentCreateOpen, setAppointmentCreateOpen] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [savingPatient, setSavingPatient] = useState(false);
   const selectedPatient = editMode ? draftPatient : localPatient;
   const patientName = fullPatientName(selectedPatient) || "Patient";
   const canCreateAppointments = currentUser.role === "Staff";
@@ -87,6 +89,8 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
       setViewerPayload(null);
       setAppointmentRows(loadMockAppointments());
       setAppointmentCreateOpen(false);
+      setSaveError("");
+      setSavingPatient(false);
     }
   }, [open, patient?.patientId]);
 
@@ -182,6 +186,24 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
     setAppointmentRows(nextAppointments);
     saveMockAppointments(nextAppointments);
     setAppointmentCreateOpen(false);
+  };
+
+  const savePatientChanges = async () => {
+    setSaveError("");
+    setSavingPatient(true);
+
+    try {
+      const savedPatient = await onSavePatient?.(draftPatient);
+      const nextPatient = savedPatient ?? draftPatient;
+      setLocalPatient(nextPatient);
+      setDraftPatient(nextPatient);
+      setLocalVisits(draftVisits);
+      setEditMode(false);
+    } catch (caughtError) {
+      setSaveError(caughtError instanceof Error ? caughtError.message : "Unable to save patient.");
+    } finally {
+      setSavingPatient(false);
+    }
   };
 
   const tabs = [
@@ -391,9 +413,11 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
                 <>
                   <Button
                     variant="secondary"
+                    disabled={savingPatient}
                     onClick={() => {
                       setDraftPatient(localPatient);
                       setDraftVisits(localVisits);
+                      setSaveError("");
                       setEditMode(false);
                     }}
                   >
@@ -401,14 +425,10 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
                   </Button>
                   <Button
                     icon={<Save size={17} />}
-                    onClick={() => {
-                      setLocalPatient(draftPatient);
-                      setLocalVisits(draftVisits);
-                      onSavePatient?.(draftPatient);
-                      setEditMode(false);
-                    }}
+                    disabled={savingPatient}
+                    onClick={() => { void savePatientChanges(); }}
                   >
-                    Save Changes
+                    {savingPatient ? "Saving..." : "Save Changes"}
                   </Button>
                 </>
               ) : canEdit ? (
@@ -426,6 +446,7 @@ export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, r
               ) : null}
             </div>
           </div>
+          {saveError && <div className="alert-card">{saveError}</div>}
           <Tabs tabs={tabs} activeId={activeTab} onChange={setActiveTab} />
         </section>
       </div>

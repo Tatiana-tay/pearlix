@@ -183,11 +183,14 @@ export interface Payment {
 }
 
 export interface BackendPatient {
+  id?: string;
   patientId: string;
   firstName: string;
   lastName: string;
+  fullName?: string;
   nationalIdOrPassport: string;
   dateOfBirth: string;
+  age?: number;
   gender: Gender;
   phoneNumber: string;
   medicalConditionsHistory: string;
@@ -196,6 +199,8 @@ export interface BackendPatient {
   emergencyContact: string;
   address: string;
   createdAt: string;
+  updatedAt?: string;
+  version?: number;
   email?: string;
 }
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import type { BackendPatient, Gender } from "../../types/models";
+import type { PatientPayload } from "../../api/patients";
+import type { Gender } from "../../types/models";
 import { ageFromDate } from "../../utils/format";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
@@ -11,7 +12,7 @@ import { Textarea } from "../ui/Textarea";
 interface PatientCreateModalProps {
   open: boolean;
   onClose: () => void;
-  onCreate: (patient: BackendPatient) => void;
+  onCreate: (patient: PatientPayload) => Promise<void> | void;
 }
 
 const bloodGroups = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
@@ -32,10 +33,14 @@ const emptyForm = {
 
 export function PatientCreateModal({ open, onClose, onCreate }: PatientCreateModalProps) {
   const [form, setForm] = useState(emptyForm);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (open) {
       setForm(emptyForm);
+      setError("");
+      setSaving(false);
     }
   }, [open]);
 
@@ -43,24 +48,31 @@ export function PatientCreateModal({ open, onClose, onCreate }: PatientCreateMod
     setForm((current) => ({ ...current, [field]: value }));
   };
 
-  const handleSubmit = (event: FormEvent) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    onCreate({
-      patientId: `PT-${Date.now().toString().slice(-6)}`,
-      firstName: form.firstName,
-      lastName: form.lastName,
-      nationalIdOrPassport: form.nationalIdOrPassport,
-      dateOfBirth: form.dateOfBirth,
-      gender: form.gender,
-      phoneNumber: form.phoneNumber,
-      medicalConditionsHistory: form.medicalConditionsHistory,
-      bloodGroup: form.bloodGroup,
-      insuranceInfo: form.insuranceInfo,
-      emergencyContact: form.emergencyContact,
-      address: form.address,
-      createdAt: "2026-02-09",
-    });
-    onClose();
+    setError("");
+    setSaving(true);
+
+    try {
+      await onCreate({
+        firstName: form.firstName,
+        lastName: form.lastName,
+        nationalIdOrPassport: form.nationalIdOrPassport,
+        dateOfBirth: form.dateOfBirth,
+        gender: form.gender,
+        phoneNumber: form.phoneNumber,
+        medicalConditionsHistory: form.medicalConditionsHistory,
+        bloodGroup: form.bloodGroup,
+        insuranceInfo: form.insuranceInfo,
+        emergencyContact: form.emergencyContact,
+        address: form.address,
+      });
+      onClose();
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Unable to create patient.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const calculatedAge = form.dateOfBirth ? `${ageFromDate(form.dateOfBirth)} years` : "Select date of birth";
@@ -74,12 +86,13 @@ export function PatientCreateModal({ open, onClose, onCreate }: PatientCreateMod
       width={760}
       footer={
         <>
-          <Button variant="secondary" type="button" onClick={onClose}>Cancel</Button>
-          <Button type="submit" form="patient-create-form">Create Patient</Button>
+          <Button variant="secondary" type="button" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button type="submit" form="patient-create-form" disabled={saving}>{saving ? "Creating..." : "Create Patient"}</Button>
         </>
       }
     >
       <form id="patient-create-form" className="stack" onSubmit={handleSubmit}>
+        {error && <div className="alert-card">{error}</div>}
         <section className="soft-panel">
           <h3 className="card-title">Personal Information</h3>
           <div className="field-grid mt-16">
@@ -88,7 +101,7 @@ export function PatientCreateModal({ open, onClose, onCreate }: PatientCreateMod
             <Input label="National ID / Passport" required value={form.nationalIdOrPassport} onChange={(event) => updateField("nationalIdOrPassport", event.target.value)} />
             <Input label="Date of Birth" required type="date" value={form.dateOfBirth} onChange={(event) => updateField("dateOfBirth", event.target.value)} />
             <Input label="Age" value={calculatedAge} readOnly />
-            <Select label="Sex" options={["Male", "Female"]} value={form.gender} onChange={(event) => updateField("gender", event.target.value)} />
+            <Select label="Sex" options={["Male", "Female"]} value={form.gender} onChange={(event) => updateField("gender", event.target.value as Gender)} />
           </div>
         </section>
 
