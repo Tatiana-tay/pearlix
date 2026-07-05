@@ -1,5 +1,18 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, CircleDollarSign, FileText, Search, WalletCards } from "lucide-react";
+import {
+  adaptInvoiceDTO,
+  adaptPaymentDTO,
+  cancelInvoice,
+  createPayment,
+  listInvoices,
+  listPayments,
+  toInvoiceCancelPayload,
+  toInvoiceUpdatePayload,
+  toPaymentPayload,
+  updateInvoiceTotal,
+} from "../../api/billing";
+import { isApiError } from "../../api/errors";
 import { InvoiceDetails } from "../../components/billing/InvoiceDetails";
 import { PaymentModal } from "../../components/billing/PaymentModal";
 import { PageHeader } from "../../components/layout/PageHeader";
@@ -11,22 +24,54 @@ import { FilterPopover } from "../../components/ui/FilterPopover";
 import { Input } from "../../components/ui/Input";
 import { Select } from "../../components/ui/Select";
 import { StatCard } from "../../components/ui/StatCard";
-import { useCurrentUser } from "../../context/SessionContext";
+import { useCurrentUser, useSession } from "../../context/SessionContext";
 import { getPatientById, getStaffProfileById, getVisitById } from "../../data/adapters";
-import type { BackendInvoice } from "../../types/models";
+import type { BackendInvoice, BackendPayment } from "../../types/models";
 import { currency, fullPatientName, prettyDate } from "../../utils/format";
-import { loadMockInvoices, saveMockInvoices } from "../../utils/mockClinicState";
 import { invoiceStatusTone } from "../../utils/statusStyles";
 
 export function BillingPage() {
   const currentUser = useCurrentUser();
+  const { accessToken, clearSession } = useSession();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("All");
   const [dateFilter, setDateFilter] = useState("");
   const [invoiceIdQuery, setInvoiceIdQuery] = useState("");
-  const [invoiceRows, setInvoiceRows] = useState<BackendInvoice[]>(loadMockInvoices);
+  const [invoiceRows, setInvoiceRows] = useState<BackendInvoice[]>([]);
+  const [paymentRows, setPaymentRows] = useState<BackendPayment[]>([]);
   const [selectedInvoice, setSelectedInvoice] = useState<BackendInvoice | null>(null);
   const [paymentInvoice, setPaymentInvoice] = useState<BackendInvoice | null>(null);
+  const [loadingBilling, setLoadingBilling] = useState(true);
+  const [pageError, setPageError] = useState("");
+
+  useEffect(() => {
+    if (!accessToken) {
+      setLoadingBilling(false);
+      setPageError("Sign in again to view billing.");
+      return;
+    }
+    let cancelled = false;
+    setLoadingBilling(true);
+    setPageError("");
+    Promise.all([listInvoices({ accessToken }), listPayments({ accessToken })])
+      .then(([invoices, payments]) => {
+        if (cancelled) return;
+        setInvoiceRows(invoices.map(adaptInvoiceDTO));
+        setPaymentRows(payments.map(adaptPaymentDTO));
+        setPageError("");
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        handleAuthError(error, clearSession);
+        setPageError(toBillingErrorMessage(error, "Unable to load billing."));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingBilling(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, clearSession]);
 
   const filteredInvoices = useMemo(() => {
     const normalized = query.toLowerCase();
@@ -48,23 +93,59 @@ export function BillingPage() {
     .filter((invoice) => invoice.status !== "Paid" && invoice.status !== "Cancelled")
     .reduce((sum, invoice) => sum + (invoice.balance ?? Math.max(invoice.totalAmount - (invoice.paidAmount ?? 0), 0)), 0);
 
-  const saveInvoice = (invoice: BackendInvoice) => {
-    const nextRows = invoiceRows.map((item) => item.id === invoice.id ? invoice : item);
-    saveMockInvoices(nextRows);
-    const reloadedRows = loadMockInvoices();
-    const reloadedInvoice = reloadedRows.find((item) => item.id === invoice.id) ?? invoice;
-    setInvoiceRows(reloadedRows);
-    setSelectedInvoice(reloadedInvoice);
-    setPaymentInvoice((current) => current?.id === invoice.id ? (reloadedInvoice.status === "Cancelled" ? null : reloadedInvoice) : current);
+  const refreshBilling = async (targetInvoiceId?: string) => {
+    if (!accessToken) return;
+    const [invoices, payments] = await Promise.all([listInvoices({ accessToken }), listPayments({ accessToken })]);
+    const adaptedInvoices = invoices.map(adaptInvoiceDTO);
+    setInvoiceRows(adaptedInvoices);
+    setPaymentRows(payments.map(adaptPaymentDTO));
+    if (targetInvoiceId) {
+      const refreshed = adaptedInvoices.find((invoice) => invoice.id === targetInvoiceId) ?? null;
+      setSelectedInvoice((current) => current?.id === targetInvoiceId ? refreshed : current);
+      setPaymentInvoice((current) => current?.id === targetInvoiceId ? (refreshed?.status === "Cancelled" ? null : refreshed) : current);
+    }
   };
 
-  const applyPayment = (invoice: BackendInvoice) => {
+  const saveInvoice = async (invoice: BackendInvoice) => {
+    if (!accessToken) throw new Error("Sign in again to edit invoices.");
+    try {
+      const savedInvoice = adaptInvoiceDTO(await updateInvoiceTotal(invoice.id, toInvoiceUpdatePayload(invoice), { accessToken }));
+      setInvoiceRows((current) => current.map((item) => item.id === savedInvoice.id ? savedInvoice : item));
+      setSelectedInvoice(savedInvoice);
+      setPaymentInvoice((current) => current?.id === savedInvoice.id ? savedInvoice : current);
+      setPageError("");
+    } catch (error) {
+      handleAuthError(error, clearSession);
+      throw new Error(toBillingErrorMessage(error, "Unable to save invoice."));
+    }
+  };
+
+  const saveInvoiceCancel = async (invoice: BackendInvoice) => {
+    if (!accessToken) throw new Error("Sign in again to cancel invoices.");
+    try {
+      const savedInvoice = adaptInvoiceDTO(await cancelInvoice(invoice.id, toInvoiceCancelPayload(invoice), { accessToken }));
+      setInvoiceRows((current) => current.map((item) => item.id === savedInvoice.id ? savedInvoice : item));
+      setSelectedInvoice(savedInvoice);
+      setPaymentInvoice((current) => current?.id === savedInvoice.id ? null : current);
+      setPageError("");
+    } catch (error) {
+      handleAuthError(error, clearSession);
+      throw new Error(toBillingErrorMessage(error, "Unable to cancel invoice."));
+    }
+  };
+
+  const applyPayment = async (invoice: BackendInvoice, amount: number, note?: string) => {
     if (invoice.status === "Cancelled") return;
-    const reloadedRows = loadMockInvoices();
-    const reloadedInvoice = reloadedRows.find((item) => item.id === invoice.id) ?? invoice;
-    setInvoiceRows(reloadedRows);
-    setSelectedInvoice((current) => current?.id === invoice.id ? reloadedInvoice : current);
-    setPaymentInvoice(reloadedInvoice.status === "Cancelled" ? null : reloadedInvoice);
+    if (!accessToken) throw new Error("Sign in again to process payments.");
+    try {
+      const payment = adaptPaymentDTO(await createPayment(toPaymentPayload(invoice, amount, note), { accessToken }));
+      setPaymentRows((current) => [payment, ...current]);
+      await refreshBilling(invoice.id);
+      setPageError("");
+    } catch (error) {
+      handleAuthError(error, clearSession);
+      throw new Error(toBillingErrorMessage(error, "Unable to process payment."));
+    }
   };
 
   const openPayment = (invoice: BackendInvoice) => {
@@ -78,7 +159,7 @@ export function BillingPage() {
       header: "Patient",
       cell: (invoice) => {
         const patient = getPatientById(invoice.patientId);
-        return patient ? fullPatientName(patient) : invoice.patientId;
+        return invoice.patientName || (patient ? fullPatientName(patient) : invoice.patientId);
       },
     },
     {
@@ -90,7 +171,7 @@ export function BillingPage() {
     },
     {
       header: "Doctor",
-      cell: (invoice) => getStaffProfileById(invoice.doctorId)?.fullName,
+      cell: (invoice) => invoice.doctorName || getStaffProfileById(invoice.doctorId)?.fullName,
     },
     { header: "Total", cell: (invoice) => currency(invoice.totalAmount) },
     { header: "Paid", cell: (invoice) => currency(invoice.paidAmount ?? 0) },
@@ -101,6 +182,7 @@ export function BillingPage() {
   return (
     <div className="page-shell">
       <PageHeader title="Billing" subtitle="Manage invoices and payments." />
+      {pageError && <div className="alert-card">{pageError}</div>}
       <div className="grid grid-4">
         <StatCard label="Total Invoices" value={invoiceRows.length} icon={<FileText size={22} />} />
         <StatCard label="Pending Amount" value={currency(pendingAmount)} icon={<CircleDollarSign size={22} />} />
@@ -134,7 +216,7 @@ export function BillingPage() {
         <div className="between mb-16">
           <h2 className="card-title">All Invoices</h2>
         </div>
-        <DataTable columns={columns} rows={filteredInvoices} getRowKey={(invoice) => invoice.id} onRowClick={setSelectedInvoice} onRowDoubleClick={setSelectedInvoice} />
+        {loadingBilling ? <div className="empty-inline">Loading billing...</div> : <DataTable columns={columns} rows={filteredInvoices} getRowKey={(invoice) => invoice.id} onRowClick={setSelectedInvoice} onRowDoubleClick={setSelectedInvoice} />}
       </Card>
       <InvoiceDetails
         invoice={selectedInvoice}
@@ -142,6 +224,8 @@ export function BillingPage() {
         onClose={() => setSelectedInvoice(null)}
         onProcessPayment={openPayment}
         onSave={saveInvoice}
+        onCancelInvoice={saveInvoiceCancel}
+        payments={paymentRows}
         canEditInvoice={canEditInvoice}
         canProcessPayment={canProcessPayment}
       />
@@ -150,4 +234,35 @@ export function BillingPage() {
       )}
     </div>
   );
+}
+
+function handleAuthError(error: unknown, clearSession: (message?: string) => void) {
+  if (isApiError(error) && error.status === 401) {
+    clearSession("Your session has expired. Please sign in again.");
+  }
+}
+
+function toBillingErrorMessage(error: unknown, fallback: string) {
+  if (isApiError(error)) {
+    if (error.status === 409) {
+      return "This billing record was updated elsewhere. Please refresh and try again.";
+    }
+    const validationMessage = formatValidationErrors(error.validationErrors);
+    if (validationMessage) return validationMessage;
+    return error.message || fallback;
+  }
+  if (error instanceof TypeError) {
+    return "Cannot reach the backend. Make sure the backend server is running and try again.";
+  }
+  if (error instanceof Error) {
+    return error.message || fallback;
+  }
+  return fallback;
+}
+
+function formatValidationErrors(errors: Record<string, string[]> | undefined) {
+  if (!errors) return "";
+  return Object.entries(errors)
+    .map(([field, messages]) => `${field}: ${messages.join(" ")}`)
+    .join(" ");
 }

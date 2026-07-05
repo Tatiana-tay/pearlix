@@ -345,13 +345,21 @@ export interface BackendAIResultFinding {
 export interface BackendInvoice {
   id: string;
   patientId: string;
+  patientName?: string;
   visitId: string;
   doctorId: string;
+  doctorProfileId?: string;
+  doctorName?: string;
+  appointmentId?: string;
   invoiceDate: string;
   totalAmount: number;
   paidAmount?: number;
   balance?: number;
   status: Invoice["status"];
+  note?: string;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface BackendPayment {
@@ -361,4 +369,7 @@ export interface BackendPayment {
   paymentMethod: Payment["Payment_Method"];
   paymentDate: string;
   notes?: string;
+  receivedById?: string;
+  receivedByName?: string;
+  createdAt?: string;
 }

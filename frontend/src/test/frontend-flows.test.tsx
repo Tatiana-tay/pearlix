@@ -18,12 +18,14 @@ import { navConfig } from "../navigation/navConfig";
 import { UsersPage } from "../pages/admin/UsersPage";
 import { ActiveVisitPage } from "../pages/doctor/ActiveVisitPage";
 import { MyAppointmentsPage } from "../pages/doctor/MyAppointmentsPage";
+import { BillingPage } from "../pages/staff/BillingPage";
 import { AppointmentsPage } from "../pages/staff/AppointmentsPage";
 import { PatientsPage } from "../pages/staff/PatientsPage";
 import { SettingsPage } from "../pages/shared/SettingsPage";
 import { routes } from "../routes";
 import { adaptAppointmentDTO, toAppointmentPayload, toAppointmentStatusPayload } from "../api/appointments";
 import { adaptAvailabilityExceptionDTO, toAvailabilityExceptionPayload } from "../api/availabilityExceptions";
+import { adaptInvoiceDTO, adaptPaymentDTO, toInvoiceUpdatePayload, toPaymentPayload } from "../api/billing";
 import { adaptWorkingShiftDTO, toWorkingShiftPayload } from "../api/workingShifts";
 import { adaptVisitDTO, toVisitNotesPayload } from "../api/visits";
 import type { BackendAIResult, BackendAppointment, BackendAvailabilityException, BackendInvoice, BackendPatient, BackendShift, BackendStaffProfile, User } from "../types/models";
@@ -689,6 +691,166 @@ describe("visit lifecycle API integration", () => {
   });
 });
 
+describe("billing API integration", () => {
+  it("maps invoice and payment DTOs and keeps payloads billing-only", () => {
+    const invoice = adaptInvoiceDTO({
+      id: 5,
+      visitId: 8,
+      appointmentId: 42,
+      patientId: 11,
+      patientName: "Backend Patient",
+      doctorProfileId: 7,
+      doctorName: "Dr. Backend",
+      totalAmount: "150.00",
+      paidAmount: "50.00",
+      balance: "100.00",
+      status: "Partially Paid",
+      note: "Billing note",
+      version: 3,
+      createdAt: "2026-02-09T07:00:00Z",
+    });
+    const payment = adaptPaymentDTO({
+      id: 9,
+      invoiceId: 5,
+      amount: "50.00",
+      method: "Cash",
+      receivedById: 2,
+      receivedByName: "Olivia Frontdesk",
+      note: "Cash",
+      createdAt: "2026-02-09T08:00:00Z",
+    });
+
+    expect(invoice.patientName).toBe("Backend Patient");
+    expect(invoice.doctorProfileId).toBe("7");
+    expect(invoice.totalAmount).toBe(150);
+    expect(invoice.version).toBe(3);
+    expect(payment.amountPaid).toBe(50);
+    expect(payment.paymentMethod).toBe("Cash");
+
+    const invoicePayload = toInvoiceUpdatePayload(invoice);
+    const paymentPayload = toPaymentPayload(invoice, 25, "Cash note");
+    expect(invoicePayload).toEqual(expect.objectContaining({ totalAmount: 150, version: 3 }));
+    expect(paymentPayload).toEqual(expect.objectContaining({ invoiceId: "5", amount: 25, method: "Cash" }));
+    [invoicePayload, paymentPayload].forEach((payload) => {
+      expect(payload).not.toHaveProperty("appointmentId");
+      expect(payload).not.toHaveProperty("doctorProfileId");
+      expect(payload).not.toHaveProperty("subjectiveNotes");
+      expect(payload).not.toHaveProperty("clinicalDiagnosis");
+    });
+  });
+
+  it("loads backend invoices and records payment without browser refresh", async () => {
+    const user = userEvent.setup();
+    seedAuthSession();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/api/invoices/") && method === "GET") {
+        return new Response(JSON.stringify({
+          results: [{
+            id: 5,
+            visitId: 8,
+            appointmentId: 42,
+            patientId: 11,
+            patientName: "Backend Patient",
+            doctorProfileId: 7,
+            doctorName: "Dr. Backend",
+            totalAmount: "150.00",
+            paidAmount: "0.00",
+            balance: "150.00",
+            status: "Pending",
+            note: "",
+            version: 1,
+            createdAt: "2026-02-09T07:00:00Z",
+          }],
+        }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      if (url.endsWith("/api/payments/") && method === "GET") {
+        return new Response(JSON.stringify({ results: [] }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      if (url.endsWith("/api/payments/") && method === "POST") {
+        const body = JSON.parse(String(init?.body));
+        expect(body).toEqual(expect.objectContaining({ invoiceId: "5", amount: 100, method: "Cash" }));
+        expect(body).not.toHaveProperty("appointmentId");
+        return new Response(JSON.stringify({
+          id: 9,
+          invoiceId: 5,
+          amount: "100.00",
+          method: "Cash",
+          note: "Cash",
+          createdAt: "2026-02-09T08:00:00Z",
+        }), { headers: { "Content-Type": "application/json" }, status: 201 });
+      }
+      return new Response(JSON.stringify({ detail: "Not found." }), { headers: { "Content-Type": "application/json" }, status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter>
+        <SessionProvider validateStoredSession={false}>
+          <BillingPage />
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Backend Patient");
+    await user.click(screen.getByRole("button", { name: /5 backend patient/i }));
+    await user.click(screen.getByRole("button", { name: "Process Payment" }));
+    await user.type(screen.getByLabelText("Amount to pay"), "100");
+    await user.click(screen.getByRole("button", { name: "Confirm Payment" }));
+    expect(await screen.findByText("Payment recorded and invoice balance updated.")).toBeInTheDocument();
+  });
+
+  it("shows backend billing validation and permission errors readably", async () => {
+    const user = userEvent.setup();
+    seedAuthSession();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/api/invoices/")) {
+        return new Response(JSON.stringify({
+          results: [{
+            id: 5,
+            visitId: 8,
+            patientId: 11,
+            patientName: "Backend Patient",
+            doctorProfileId: 7,
+            doctorName: "Dr. Backend",
+            totalAmount: "150.00",
+            paidAmount: "0.00",
+            balance: "150.00",
+            status: "Pending",
+            version: 1,
+            createdAt: "2026-02-09T07:00:00Z",
+          }],
+        }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      if (url.endsWith("/api/payments/") && method === "GET") {
+        return new Response(JSON.stringify({ results: [] }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      if (url.endsWith("/api/payments/") && method === "POST") {
+        return new Response(JSON.stringify({ amount: ["Payment amount cannot exceed invoice balance."] }), { headers: { "Content-Type": "application/json" }, status: 400 });
+      }
+      return new Response(JSON.stringify({ detail: "You do not have permission to perform this action." }), { headers: { "Content-Type": "application/json" }, status: 403 });
+    }));
+
+    render(
+      <MemoryRouter>
+        <SessionProvider validateStoredSession={false}>
+          <BillingPage />
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Backend Patient");
+    await user.click(screen.getByRole("button", { name: /5 backend patient/i }));
+    await user.click(screen.getByRole("button", { name: "Process Payment" }));
+    await user.type(screen.getByLabelText("Amount to pay"), "150");
+    await user.click(screen.getByRole("button", { name: "Confirm Payment" }));
+    expect(await screen.findByText("amount: Payment amount cannot exceed invoice balance.")).toBeInTheDocument();
+  });
+});
+
 describe("working shifts and leave API adapters", () => {
   it("maps backend working shifts to UI rows with version and active state", () => {
     const shift = adaptWorkingShiftDTO({
@@ -1028,11 +1190,7 @@ describe("payment modal", () => {
     await user.type(screen.getByLabelText("Amount to pay"), "100");
     await user.click(screen.getByRole("button", { name: "Confirm Payment" }));
 
-    expect(onPaymentSaved).toHaveBeenCalledWith(expect.objectContaining({
-      id: "INV-TEST",
-      status: "Paid",
-      balance: 0,
-    }));
+    expect(onPaymentSaved).toHaveBeenCalledWith(invoice, 100, undefined);
   });
 
   it("does not open for a cancelled invoice", () => {

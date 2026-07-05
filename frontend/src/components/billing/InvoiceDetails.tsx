@@ -3,7 +3,6 @@ import { FileDown, Pencil, Printer, Save } from "lucide-react";
 import { getPatientById, getStaffProfileById, getVisitById } from "../../data/adapters";
 import type { BackendInvoice, BackendPayment, Invoice } from "../../types/models";
 import { currency, fullPatientName, prettyDate } from "../../utils/format";
-import { loadMockPayments } from "../../utils/mockClinicState";
 import { invoiceStatusTone } from "../../utils/statusStyles";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
@@ -19,8 +18,12 @@ interface InvoiceDetailsProps {
   onProcessPayment?: (invoice: BackendInvoice) => void;
   canProcessPayment?: boolean;
   canEditInvoice?: boolean;
-  onSave?: (invoice: BackendInvoice) => void;
+  payments?: BackendPayment[];
+  onSave?: (invoice: BackendInvoice) => Promise<void> | void;
+  onCancelInvoice?: (invoice: BackendInvoice) => Promise<void> | void;
 }
+
+const emptyPayments: BackendPayment[] = [];
 
 export function InvoiceDetails({
   invoice,
@@ -29,7 +32,9 @@ export function InvoiceDetails({
   onProcessPayment,
   canProcessPayment = true,
   canEditInvoice = false,
+  payments: invoicePayments = emptyPayments,
   onSave,
+  onCancelInvoice,
 }: InvoiceDetailsProps) {
   const [editMode, setEditMode] = useState(false);
   const [draftInvoice, setDraftInvoice] = useState<BackendInvoice | null>(invoice);
@@ -37,18 +42,20 @@ export function InvoiceDetails({
   const [draftDescription, setDraftDescription] = useState("");
   const [payments, setPayments] = useState<BackendPayment[]>([]);
   const [actionMessage, setActionMessage] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (open) {
       setEditMode(false);
       setDraftInvoice(invoice);
-      setPayments(invoice ? loadMockPayments().filter((payment) => payment.invoiceId === invoice.id) : []);
+      setPayments(invoice ? invoicePayments.filter((payment) => payment.invoiceId === invoice.id) : []);
       setActionMessage("");
+      setSaving(false);
       const visit = getVisitById(invoice?.visitId);
       setDescription(visit?.treatmentNotes ?? "");
       setDraftDescription(visit?.treatmentNotes ?? "");
     }
-  }, [invoice, open]);
+  }, [invoice, invoicePayments, open]);
 
   if (!invoice) {
     return null;
@@ -73,13 +80,21 @@ export function InvoiceDetails({
 
   const save = () => {
     if (!draftInvoice || invalidTotal || isCancelled) return;
-    onSave?.({
+    setSaving(true);
+    Promise.resolve(onSave?.({
       ...draftInvoice,
       paidAmount: paid,
       balance: Math.max(draftInvoice.totalAmount - paid, 0),
-    });
-    setDescription(draftDescription);
-    setEditMode(false);
+    }))
+      .then(() => {
+        setDescription(draftDescription);
+        setEditMode(false);
+        setActionMessage("Invoice saved.");
+      })
+      .catch((error: unknown) => {
+        setActionMessage(error instanceof Error ? error.message : "Unable to save invoice.");
+      })
+      .finally(() => setSaving(false));
   };
 
   const cancel = () => {
@@ -90,9 +105,16 @@ export function InvoiceDetails({
 
   const cancelInvoice = () => {
     if (isCancelled) return;
-    const cancelled = { ...invoice, status: "Cancelled" as Invoice["status"] };
-    onSave?.(cancelled);
-    setDraftInvoice(cancelled);
+    setSaving(true);
+    Promise.resolve(onCancelInvoice?.(invoice))
+      .then(() => {
+        setDraftInvoice({ ...invoice, status: "Cancelled" as Invoice["status"] });
+        setActionMessage("Invoice cancelled.");
+      })
+      .catch((error: unknown) => {
+        setActionMessage(error instanceof Error ? error.message : "Unable to cancel invoice.");
+      })
+      .finally(() => setSaving(false));
   };
 
   const printInvoice = () => {
@@ -130,15 +152,15 @@ export function InvoiceDetails({
       footer={
         editMode ? (
           <>
-            <Button variant="secondary" onClick={cancel}>Cancel</Button>
-            <Button icon={<Save size={17} />} disabled={invalidTotal} onClick={save}>Save Changes</Button>
+            <Button variant="secondary" disabled={saving} onClick={cancel}>Cancel</Button>
+            <Button icon={<Save size={17} />} disabled={invalidTotal || saving} onClick={save}>{saving ? "Saving..." : "Save Changes"}</Button>
           </>
         ) : (
           <>
             <Button variant="secondary" icon={<Printer size={17} />} onClick={printInvoice}>Print Invoice</Button>
             <Button variant="secondary" icon={<FileDown size={17} />} onClick={exportInvoice}>Export PDF</Button>
             {canModifyInvoice && <Button variant="secondary" icon={<Pencil size={17} />} onClick={() => setEditMode(true)}>Edit</Button>}
-            {canModifyInvoice && <Button variant="danger" onClick={cancelInvoice}>Cancel Invoice</Button>}
+            {canModifyInvoice && <Button variant="danger" disabled={saving} onClick={cancelInvoice}>Cancel Invoice</Button>}
             {canEditInvoice && isCancelled && <Button variant="secondary" disabled>Already Cancelled</Button>}
             {canTakePayment && onProcessPayment && <Button onClick={() => onProcessPayment(invoice)}>Process Payment</Button>}
           </>

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { getPatientById } from "../../data/adapters";
 import type { BackendInvoice, Payment } from "../../types/models";
 import { currency, fullPatientName } from "../../utils/format";
-import { recordMockPayment } from "../../utils/mockClinicState";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { Modal } from "../ui/Modal";
@@ -12,7 +11,7 @@ interface PaymentModalProps {
   invoice: BackendInvoice | null;
   open: boolean;
   onClose: () => void;
-  onPaymentSaved?: (invoice: BackendInvoice) => void;
+  onPaymentSaved?: (invoice: BackendInvoice, amount: number, note?: string) => Promise<void> | void;
 }
 
 export function PaymentModal({ invoice, open, onClose, onPaymentSaved }: PaymentModalProps) {
@@ -21,6 +20,7 @@ export function PaymentModal({ invoice, open, onClose, onPaymentSaved }: Payment
   const [notes, setNotes] = useState("");
   const [message, setMessage] = useState("");
   const [messageKind, setMessageKind] = useState<"notice" | "alert">("notice");
+  const [saving, setSaving] = useState(false);
 
   const patient = useMemo(
     () => getPatientById(invoice?.patientId),
@@ -34,6 +34,7 @@ export function PaymentModal({ invoice, open, onClose, onPaymentSaved }: Payment
       setNotes("");
       setMessage("");
       setMessageKind("notice");
+      setSaving(false);
     }
   }, [invoice?.id, open]);
 
@@ -46,7 +47,7 @@ export function PaymentModal({ invoice, open, onClose, onPaymentSaved }: Payment
   const parsedAmount = Number(amount);
   const invalidAmount = !parsedAmount || parsedAmount <= 0 || parsedAmount > balance;
 
-  const confirmPayment = () => {
+  const confirmPayment = async () => {
     if (invoice.status === "Cancelled") {
       setMessage("This invoice has been cancelled and cannot be modified.");
       setMessageKind("alert");
@@ -57,18 +58,19 @@ export function PaymentModal({ invoice, open, onClose, onPaymentSaved }: Payment
       setMessageKind("alert");
       return;
     }
-    const updatedInvoice = recordMockPayment(invoice, {
-      invoiceId: invoice.id,
-      amountPaid: parsedAmount,
-      paymentMethod: "Cash",
-      paymentDate,
-      notes: notes.trim() || undefined,
-    });
-    onPaymentSaved?.(updatedInvoice);
-    setAmount("");
-    setNotes("");
-    setMessage("Payment captured locally and invoice balance updated.");
-    setMessageKind("notice");
+    setSaving(true);
+    try {
+      await onPaymentSaved?.(invoice, parsedAmount, notes.trim() || undefined);
+      setAmount("");
+      setNotes("");
+      setMessage("Payment recorded and invoice balance updated.");
+      setMessageKind("notice");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to record payment.");
+      setMessageKind("alert");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -80,8 +82,8 @@ export function PaymentModal({ invoice, open, onClose, onPaymentSaved }: Payment
       width={560}
       footer={
         <>
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button onClick={confirmPayment}>Confirm Payment</Button>
+          <Button variant="secondary" disabled={saving} onClick={onClose}>Cancel</Button>
+          <Button disabled={saving} onClick={() => { void confirmPayment(); }}>{saving ? "Saving..." : "Confirm Payment"}</Button>
         </>
       }
     >
