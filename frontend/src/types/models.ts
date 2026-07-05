@@ -294,13 +294,22 @@ export interface BackendVisit {
   id: string;
   appointmentId: string;
   patientId: string;
+  patientName?: string;
   doctorId: string;
+  doctorProfileId?: string;
+  doctorName?: string;
   visitDate: string;
   symptomsChiefComplaint: string;
   clinicalNotes: string;
   diagnosisNotes: string;
   treatmentNotes: string;
-  status: Visit["status"];
+  generalNotes?: string;
+  status: "Active" | "Completed" | "Pending Notes";
+  startedAt?: string;
+  completedAt?: string;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface BackendAttachment {

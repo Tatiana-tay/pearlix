@@ -32,6 +32,7 @@ interface AppointmentModalProps {
   onCreate?: (appointment: BackendAppointment) => BackendAppointment | Promise<BackendAppointment> | void | Promise<void>;
   onUpdate?: (appointment: BackendAppointment) => BackendAppointment | Promise<BackendAppointment> | void | Promise<void>;
   onStatusChange?: (appointment: BackendAppointment, status: AppointmentStatus) => BackendAppointment | Promise<BackendAppointment> | void | Promise<void>;
+  onStartVisit?: (appointment: BackendAppointment) => BackendAppointment | Promise<BackendAppointment> | void | Promise<void>;
   onRescheduleRequest?: (appointment: BackendAppointment) => void;
   onClose: () => void;
 }
@@ -62,6 +63,7 @@ export function AppointmentModal({
   onCreate,
   onUpdate,
   onStatusChange,
+  onStartVisit,
   onRescheduleRequest,
   onClose,
 }: AppointmentModalProps) {
@@ -255,13 +257,20 @@ export function AppointmentModal({
     }
   };
 
-  const openActiveVisit = () => {
+  const openActiveVisit = async () => {
     if (!appointment) return;
-    saveActiveVisitAppointmentId(appointment.id);
-    if (displayedStatus === "Checked-in") {
-      void applyStatus("In Visit");
+    setSaveError("");
+    setSaving(true);
+    try {
+      const savedAppointment = await onStartVisit?.(appointment);
+      saveActiveVisitAppointmentId(appointment.id);
+      setDisplayedStatus(savedAppointment?.status ?? "In Visit");
+      navigate(routes.doctor.activeVisit);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Unable to start visit.");
+    } finally {
+      setSaving(false);
     }
-    navigate(routes.doctor.activeVisit);
   };
 
   const footer = editMode ? (
@@ -281,7 +290,7 @@ export function AppointmentModal({
       {canManageAppointments && <Button variant="secondary" disabled={saving} onClick={() => { void applyStatus("Postponed"); }}>Postpone</Button>}
       {canManageAppointments && <Button variant="ghost" disabled={saving} onClick={() => { void applyStatus("No-show"); }}>No-show</Button>}
       {canManageAppointments && <Button variant="danger" disabled={saving} onClick={() => { void applyStatus("Cancelled"); }}>Cancel Appointment</Button>}
-      {canStartVisit && <Button onClick={openActiveVisit}>{displayedStatus === "In Visit" ? "Continue Visit" : "Start Visit"}</Button>}
+      {canStartVisit && <Button disabled={saving} onClick={() => { void openActiveVisit(); }}>{displayedStatus === "In Visit" ? "Continue Visit" : "Start Visit"}</Button>}
       {isReadOnly && <Button variant="secondary" onClick={onClose}>Close</Button>}
     </>
   );

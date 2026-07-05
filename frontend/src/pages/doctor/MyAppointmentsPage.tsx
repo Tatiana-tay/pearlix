@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { adaptAppointmentDTO, listAppointments } from "../../api/appointments";
 import { getCurrentEmployeeProfile, adaptEmployeeProfileDTO } from "../../api/employeeProfiles";
 import { isApiError } from "../../api/errors";
+import { adaptVisitWorkflowResponse, startVisit } from "../../api/visits";
 import { AppointmentModal } from "../../components/appointments/AppointmentModal";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { PatientProfileDrawer } from "../../components/patients/PatientProfileDrawer";
@@ -92,6 +93,25 @@ export function MyAppointmentsPage() {
   const openActiveVisit = (appointment: BackendAppointment) => {
     saveActiveVisitAppointmentId(appointment.id);
     navigate(routes.doctor.activeVisit);
+  };
+
+  const startBackendVisit = async (appointment: BackendAppointment) => {
+    if (!accessToken) {
+      throw new Error("Sign in again to start visits.");
+    }
+    if (typeof appointment.version !== "number") {
+      throw new Error("Missing appointment version. Refresh appointments and try again.");
+    }
+    try {
+      const { appointment: updatedAppointment } = adaptVisitWorkflowResponse(await startVisit(appointment.id, appointment.version, { accessToken }));
+      setAppointments((current) => current.map((item) => item.id === updatedAppointment.id ? updatedAppointment : item));
+      setSelectedAppointment(updatedAppointment);
+      saveActiveVisitAppointmentId(updatedAppointment.id);
+      return updatedAppointment;
+    } catch (error) {
+      handleAuthError(error, clearSession);
+      throw new Error(toAppointmentErrorMessage(error, "Unable to start visit."));
+    }
   };
 
   return (
@@ -205,6 +225,7 @@ export function MyAppointmentsPage() {
         staffOptions={staffProfiles}
         open={Boolean(selectedAppointment)}
         onClose={() => setSelectedAppointment(null)}
+        onStartVisit={startBackendVisit}
       />
       <PatientProfileDrawer open={Boolean(selectedPatient)} onClose={() => setSelectedPatient(null)} patient={selectedPatient} canEdit />
     </div>
@@ -219,6 +240,9 @@ function handleAuthError(error: unknown, clearSession: (message?: string) => voi
 
 function toAppointmentErrorMessage(error: unknown, fallback: string) {
   if (isApiError(error)) {
+    if (error.status === 409) {
+      return "This visit was updated elsewhere. Please refresh and try again.";
+    }
     return error.message || fallback;
   }
   if (error instanceof TypeError) {

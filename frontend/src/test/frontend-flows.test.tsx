@@ -16,6 +16,7 @@ import { Modal } from "../components/ui/Modal";
 import { authAccessTokenStorageKey, authRefreshTokenStorageKey, authUserStorageKey, SessionProvider, useSession } from "../context/SessionContext";
 import { navConfig } from "../navigation/navConfig";
 import { UsersPage } from "../pages/admin/UsersPage";
+import { ActiveVisitPage } from "../pages/doctor/ActiveVisitPage";
 import { MyAppointmentsPage } from "../pages/doctor/MyAppointmentsPage";
 import { AppointmentsPage } from "../pages/staff/AppointmentsPage";
 import { PatientsPage } from "../pages/staff/PatientsPage";
@@ -24,6 +25,7 @@ import { routes } from "../routes";
 import { adaptAppointmentDTO, toAppointmentPayload, toAppointmentStatusPayload } from "../api/appointments";
 import { adaptAvailabilityExceptionDTO, toAvailabilityExceptionPayload } from "../api/availabilityExceptions";
 import { adaptWorkingShiftDTO, toWorkingShiftPayload } from "../api/workingShifts";
+import { adaptVisitDTO, toVisitNotesPayload } from "../api/visits";
 import type { BackendAIResult, BackendAppointment, BackendAvailabilityException, BackendInvoice, BackendPatient, BackendShift, BackendStaffProfile, User } from "../types/models";
 import { addMinutes, intervalsOverlap, isDoctorAvailableForInterval, toDateTime } from "../utils/availability";
 import { ageFromDate } from "../utils/format";
@@ -484,6 +486,206 @@ describe("appointments API integration", () => {
     fireEvent.click(screen.getByRole("button", { name: /backend patient/i }));
     expect(await screen.findByRole("dialog", { name: "Appointment Details" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+  });
+});
+
+describe("visit lifecycle API integration", () => {
+  it("maps backend visit DTOs and omits billing and AI fields from note payloads", () => {
+    const visit = adaptVisitDTO({
+      id: 8,
+      appointmentId: 42,
+      patientId: 11,
+      patientName: "Backend Patient",
+      doctorProfileId: 7,
+      doctorName: "Dr. Backend",
+      status: "Active",
+      subjectiveNotes: "Subjective",
+      objectiveNotes: "Objective",
+      assessmentNotes: "Assessment",
+      planNotes: "Plan",
+      generalNotes: "General",
+      startedAt: "2026-02-09T07:00:00Z",
+      version: 4,
+    });
+
+    expect(visit.appointmentId).toBe("42");
+    expect(visit.patientName).toBe("Backend Patient");
+    expect(visit.doctorProfileId).toBe("7");
+    expect(visit.version).toBe(4);
+
+    const payload = toVisitNotesPayload(visit);
+    expect(payload).toEqual(expect.objectContaining({
+      subjectiveNotes: "Subjective",
+      objectiveNotes: "Objective",
+      assessmentNotes: "Assessment",
+      planNotes: "Plan",
+      generalNotes: "General",
+      version: 4,
+    }));
+    expect(payload).not.toHaveProperty("due");
+    expect(payload).not.toHaveProperty("payment");
+    expect(payload).not.toHaveProperty("invoice");
+    expect(payload).not.toHaveProperty("finalDiagnosis");
+    expect(payload).not.toHaveProperty("treatmentPlan");
+  });
+
+  it("loads active visit from backend and saves notes with version", async () => {
+    const user = userEvent.setup();
+    seedAuthSession({ ...testStaffUser, role: "Doctor", email: "doctor@example.com", fullName: "Dr. Backend" });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/api/visits/active/")) {
+        return new Response(JSON.stringify({
+          id: 8,
+          appointmentId: 42,
+          patientId: 11,
+          patientName: "Backend Patient",
+          doctorProfileId: 7,
+          doctorName: "Dr. Backend",
+          status: "Active",
+          subjectiveNotes: "",
+          objectiveNotes: "",
+          assessmentNotes: "",
+          planNotes: "",
+          generalNotes: "",
+          startedAt: "2026-02-09T07:00:00Z",
+          version: 4,
+        }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      if (url.endsWith("/api/visits/8/") && method === "PATCH") {
+        const body = JSON.parse(String(init?.body));
+        expect(body).toEqual(expect.objectContaining({ subjectiveNotes: "Tooth pain", version: 4 }));
+        expect(body).not.toHaveProperty("invoice");
+        return new Response(JSON.stringify({
+          id: 8,
+          appointmentId: 42,
+          patientId: 11,
+          patientName: "Backend Patient",
+          doctorProfileId: 7,
+          doctorName: "Dr. Backend",
+          status: "Active",
+          subjectiveNotes: "Tooth pain",
+          objectiveNotes: "",
+          assessmentNotes: "",
+          planNotes: "",
+          generalNotes: "",
+          startedAt: "2026-02-09T07:00:00Z",
+          version: 5,
+        }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      return new Response(JSON.stringify({ detail: "Not found." }), { headers: { "Content-Type": "application/json" }, status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter>
+        <SessionProvider validateStoredSession={false}>
+          <ActiveVisitPage />
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Backend Patient");
+    await user.type(screen.getByLabelText("Subjective Notes"), "Tooth pain");
+    await user.click(screen.getByRole("button", { name: "Save notes" }));
+    expect(await screen.findByText("Visit notes saved.")).toBeInTheDocument();
+  });
+
+  it("shows empty active visit state when backend has no active visit", async () => {
+    seedAuthSession({ ...testStaffUser, role: "Doctor", email: "doctor@example.com", fullName: "Dr. Backend" });
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify({ detail: "No active visit." }), {
+        headers: { "Content-Type": "application/json" },
+        status: 404,
+      }),
+    ));
+
+    render(
+      <MemoryRouter>
+        <SessionProvider validateStoredSession={false}>
+          <ActiveVisitPage />
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("No active visit. Start a checked-in appointment from My Appointments.")).toBeInTheDocument();
+  });
+
+  it("completes an active visit using the backend endpoint", async () => {
+    const user = userEvent.setup();
+    seedAuthSession({ ...testStaffUser, role: "Doctor", email: "doctor@example.com", fullName: "Dr. Backend" });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/visits/active/")) {
+        return new Response(JSON.stringify({
+          id: 8,
+          appointmentId: 42,
+          patientId: 11,
+          patientName: "Backend Patient",
+          doctorProfileId: 7,
+          doctorName: "Dr. Backend",
+          status: "Active",
+          subjectiveNotes: "",
+          objectiveNotes: "",
+          assessmentNotes: "",
+          planNotes: "",
+          generalNotes: "",
+          startedAt: "2026-02-09T07:00:00Z",
+          version: 4,
+        }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      if (url.endsWith("/api/visits/8/complete/")) {
+        expect(JSON.parse(String(init?.body))).toEqual(expect.objectContaining({ version: 4 }));
+        return new Response(JSON.stringify({
+          visit: {
+            id: 8,
+            appointmentId: 42,
+            patientId: 11,
+            patientName: "Backend Patient",
+            doctorProfileId: 7,
+            doctorName: "Dr. Backend",
+            status: "Completed",
+            subjectiveNotes: "",
+            objectiveNotes: "",
+            assessmentNotes: "",
+            planNotes: "",
+            generalNotes: "",
+            startedAt: "2026-02-09T07:00:00Z",
+            completedAt: "2026-02-09T07:30:00Z",
+            version: 5,
+          },
+          appointment: {
+            id: 42,
+            patientId: 11,
+            patientName: "Backend Patient",
+            doctorProfileId: 7,
+            doctorName: "Dr. Backend",
+            startAt: "2026-02-09T07:00:00Z",
+            endAt: "2026-02-09T07:30:00Z",
+            durationMinutes: 30,
+            visitType: "Routine Checkup",
+            status: "Completed",
+            notes: "",
+            version: 6,
+          },
+        }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      return new Response(JSON.stringify({ detail: "Not found." }), { headers: { "Content-Type": "application/json" }, status: 404 });
+    }));
+
+    render(
+      <MemoryRouter>
+        <SessionProvider validateStoredSession={false}>
+          <ActiveVisitPage />
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Backend Patient");
+    await user.click(screen.getByRole("button", { name: "Complete visit" }));
+    expect(await screen.findByText("Visit completed.")).toBeInTheDocument();
+    expect(screen.getByText("Completed")).toBeInTheDocument();
   });
 });
 
