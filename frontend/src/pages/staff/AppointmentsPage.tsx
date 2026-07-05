@@ -1,5 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Plus, Search } from "lucide-react";
+import {
+  adaptAppointmentDTO,
+  createAppointment,
+  listAppointments,
+  rescheduleAppointment as rescheduleAppointmentRequest,
+  runAppointmentWorkflowAction,
+  toAppointmentPayload,
+  toAppointmentStatusPayload,
+  toAppointmentUpdatePayload,
+  updateAppointment,
+  type AppointmentWorkflowAction,
+} from "../../api/appointments";
+import { listAvailabilityExceptions, adaptAvailabilityExceptionDTO } from "../../api/availabilityExceptions";
+import { adaptEmployeeProfileDTO, listEmployeeProfiles } from "../../api/employeeProfiles";
+import { isApiError } from "../../api/errors";
+import { adaptPatientDTO, listPatients } from "../../api/patients";
+import { adaptWorkingShiftList, listWorkingShifts } from "../../api/workingShifts";
 import { AppointmentCalendar } from "../../components/appointments/AppointmentCalendar";
 import { AppointmentModal } from "../../components/appointments/AppointmentModal";
 import { PageHeader } from "../../components/layout/PageHeader";
@@ -13,7 +30,7 @@ import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { Select } from "../../components/ui/Select";
 import { Textarea } from "../../components/ui/Textarea";
 import { TimeInput } from "../../components/ui/TimeInput";
-import { useCurrentUser } from "../../context/SessionContext";
+import { useCurrentUser, useSession } from "../../context/SessionContext";
 import { getPatientById, getStaffProfileById } from "../../data/adapters";
 import type {
   AppointmentChangeLog,
@@ -32,13 +49,8 @@ import {
   toLocalDateTime,
 } from "../../utils/availability";
 import { fullPatientName } from "../../utils/format";
-import { loadMockPatients, loadMockShifts, loadMockStaffProfiles } from "../../utils/mockClinicState";
 import {
   loadMockAppointmentChangeLogs,
-  loadMockAppointments,
-  loadMockAvailabilityExceptions,
-  saveMockAppointmentChangeLogs,
-  saveMockAppointments,
 } from "../../utils/mockScheduleState";
 import { timePresetOptions } from "../../utils/shifts";
 import { appointmentStatusTone, appointmentStatusVisual } from "../../utils/statusStyles";
@@ -65,12 +77,15 @@ const rescheduleReasons: RescheduleReason[] = ["Doctor on leave", "Patient reque
 
 export function AppointmentsPage() {
   const currentUser = useCurrentUser();
-  const [appointmentRows, setAppointmentRows] = useState<BackendAppointment[]>(loadMockAppointments);
-  const [availabilityExceptionRows] = useState<BackendAvailabilityException[]>(loadMockAvailabilityExceptions);
+  const { accessToken, clearSession } = useSession();
+  const [appointmentRows, setAppointmentRows] = useState<BackendAppointment[]>([]);
+  const [availabilityExceptionRows, setAvailabilityExceptionRows] = useState<BackendAvailabilityException[]>([]);
   const [changeLogRows, setChangeLogRows] = useState<BackendAppointmentChangeLog[]>(loadMockAppointmentChangeLogs);
-  const [patientRows] = useState<BackendPatient[]>(loadMockPatients);
-  const [staffProfileRows] = useState<BackendStaffProfile[]>(loadMockStaffProfiles);
-  const [shiftRows] = useState<BackendShift[]>(loadMockShifts);
+  const [patientRows, setPatientRows] = useState<BackendPatient[]>([]);
+  const [staffProfileRows, setStaffProfileRows] = useState<BackendStaffProfile[]>([]);
+  const [shiftRows, setShiftRows] = useState<BackendShift[]>([]);
+  const [loadingAppointments, setLoadingAppointments] = useState(true);
+  const [pageError, setPageError] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("Day");
   const [selectedDate, setSelectedDate] = useState(initialSelectedDate);
   const [selectedAppointment, setSelectedAppointment] = useState<BackendAppointment | null>(null);
@@ -117,6 +132,49 @@ export function AppointmentsPage() {
   const canManageReschedule = currentUser.role === "Staff";
   const selectedDayName = dayNameFromDate(selectedDate);
 
+  useEffect(() => {
+    if (!accessToken) {
+      setLoadingAppointments(false);
+      setPageError("Sign in again to view appointments.");
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingAppointments(true);
+    setPageError("");
+
+    Promise.all([
+      listAppointments({ accessToken }),
+      listPatients({ accessToken }),
+      listEmployeeProfiles({ accessToken }),
+      listWorkingShifts({ accessToken }),
+      listAvailabilityExceptions({ accessToken }),
+    ])
+      .then(([appointments, patients, profiles, shifts, exceptions]) => {
+        if (cancelled) return;
+        setAppointmentRows(sortAppointments(appointments.map(adaptAppointmentDTO)));
+        setPatientRows(patients.map(adaptPatientDTO));
+        setStaffProfileRows(profiles.map(adaptEmployeeProfileDTO));
+        setShiftRows(adaptWorkingShiftList(shifts));
+        setAvailabilityExceptionRows(exceptions.map(adaptAvailabilityExceptionDTO));
+        setPageError("");
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        handleAuthError(error, clearSession);
+        setPageError(toAppointmentErrorMessage(error, "Unable to load appointments."));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingAppointments(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, clearSession]);
+
   const openNew = (time = "09:00", date = selectedDate) => {
     if (!canCreateAppointments) return;
     setSlotTime(time);
@@ -148,39 +206,78 @@ export function AppointmentsPage() {
     });
   };
 
-  const saveReschedule = (updatedAppointment: BackendAppointment, changeLog: BackendAppointmentChangeLog) => {
-    const nextAppointments = appointmentRows.map((appointment) => appointment.id === updatedAppointment.id ? updatedAppointment : appointment);
-    const nextLogs = [...changeLogRows, changeLog];
-
-    setAppointmentRows(nextAppointments);
-    setChangeLogRows(nextLogs);
-    saveMockAppointments(nextAppointments);
-    saveMockAppointmentChangeLogs(nextLogs);
-    setSelectedAppointment((current) => current?.id === updatedAppointment.id ? updatedAppointment : current);
-    setSelectedDate(updatedAppointment.date);
+  const saveReschedule = async (updatedAppointment: BackendAppointment, changeLog: BackendAppointmentChangeLog) => {
+    if (!accessToken) {
+      throw new Error("Sign in again to reschedule appointments.");
+    }
+    try {
+      const response = await rescheduleAppointmentRequest(updatedAppointment.id, {
+        ...toAppointmentUpdatePayload(updatedAppointment),
+        reason: changeLog.reason,
+      }, { accessToken });
+      const savedAppointment = adaptAppointmentDTO(response.appointment);
+      const nextLogs = [...changeLogRows, changeLog];
+      setAppointmentRows((current) => sortAppointments(current.map((appointment) => appointment.id === savedAppointment.id ? savedAppointment : appointment)));
+      setChangeLogRows(nextLogs);
+      setSelectedAppointment((current) => current?.id === savedAppointment.id ? savedAppointment : current);
+      setSelectedDate(savedAppointment.date);
+      setPageError("");
+    } catch (error) {
+      handleAuthError(error, clearSession);
+      throw new Error(toAppointmentErrorMessage(error, "Unable to reschedule appointment."));
+    }
     setViewMode("Day");
     setRescheduleAppointment(null);
   };
 
-  const saveNewAppointment = (appointment: BackendAppointment) => {
-    const nextAppointments = [...appointmentRows, appointment];
-    setAppointmentRows(nextAppointments);
-    saveMockAppointments(nextAppointments);
-    setSelectedDate(appointment.date);
+  const saveNewAppointment = async (appointment: BackendAppointment) => {
+    if (!accessToken) {
+      throw new Error("Sign in again to create appointments.");
+    }
+    try {
+      const savedAppointment = adaptAppointmentDTO(await createAppointment(toAppointmentPayload(appointment), { accessToken }));
+      setAppointmentRows((current) => sortAppointments([...current, savedAppointment]));
+      setSelectedDate(savedAppointment.date);
+      setPageError("");
+    } catch (error) {
+      handleAuthError(error, clearSession);
+      throw new Error(toAppointmentErrorMessage(error, "Unable to create appointment."));
+    }
     setViewMode("Day");
     setModalMode("view");
     setSelectedAppointment(null);
   };
 
-  const saveUpdatedAppointment = (updatedAppointment: BackendAppointment) => {
-    const nextAppointments = appointmentRows.map((appointment) => appointment.id === updatedAppointment.id ? updatedAppointment : appointment);
-    setAppointmentRows(nextAppointments);
-    saveMockAppointments(nextAppointments);
-    setSelectedAppointment((current) => current?.id === updatedAppointment.id ? updatedAppointment : current);
+  const saveUpdatedAppointment = async (updatedAppointment: BackendAppointment) => {
+    if (!accessToken) {
+      throw new Error("Sign in again to edit appointments.");
+    }
+    try {
+      const savedAppointment = adaptAppointmentDTO(await updateAppointment(updatedAppointment.id, toAppointmentUpdatePayload(updatedAppointment), { accessToken }));
+      setAppointmentRows((current) => sortAppointments(current.map((appointment) => appointment.id === savedAppointment.id ? savedAppointment : appointment)));
+      setSelectedAppointment((current) => current?.id === savedAppointment.id ? savedAppointment : current);
+      setPageError("");
+      return savedAppointment;
+    } catch (error) {
+      handleAuthError(error, clearSession);
+      throw new Error(toAppointmentErrorMessage(error, "Unable to save appointment."));
+    }
   };
 
-  const saveAppointmentStatus = (appointment: BackendAppointment, status: AppointmentStatus) => {
-    saveUpdatedAppointment({ ...appointment, status });
+  const saveAppointmentStatus = async (appointment: BackendAppointment, status: AppointmentStatus) => {
+    if (!accessToken) {
+      throw new Error("Sign in again to update appointments.");
+    }
+    try {
+      const savedAppointment = adaptAppointmentDTO(await runAppointmentWorkflowAction(appointment.id, toWorkflowAction(status), toAppointmentStatusPayload(appointment, status), { accessToken }));
+      setAppointmentRows((current) => sortAppointments(current.map((item) => item.id === savedAppointment.id ? savedAppointment : item)));
+      setSelectedAppointment((current) => current?.id === savedAppointment.id ? savedAppointment : current);
+      setPageError("");
+      return savedAppointment;
+    } catch (error) {
+      handleAuthError(error, clearSession);
+      throw new Error(toAppointmentErrorMessage(error, "Unable to update appointment status."));
+    }
   };
 
   return (
@@ -190,6 +287,7 @@ export function AppointmentsPage() {
         subtitle="Manage clinic appointments."
         actions={canCreateAppointments && <Button icon={<Plus size={18} />} onClick={() => openNew()}>New Appointment</Button>}
       />
+      {pageError && <div className="alert-card">{pageError}</div>}
       <Card className="calendar-controls">
         {activeSection === "Calendar" ? (
           <>
@@ -245,11 +343,13 @@ export function AppointmentsPage() {
             <Card>
               <h2 className="card-title">Schedule</h2>
               {viewMode === "Day" && (
-                <AppointmentCalendar
+                loadingAppointments ? <div className="empty-inline">Loading appointments...</div> : <AppointmentCalendar
                   appointments={visibleAppointments.filter((appointment) => appointment.date === selectedDate)}
                   onAppointmentClick={openView}
                   onSlotClick={(time) => openNew(time, selectedDate)}
                   canCreate={canCreateAppointments}
+                  patientOptions={patientRows}
+                  staffOptions={staffProfileRows}
                   isSlotAvailable={(time) =>
                     getAvailableDoctorsForSlot({
                       date: selectedDate,
@@ -296,7 +396,7 @@ export function AppointmentsPage() {
                 <h2 className="card-title">Available Doctors</h2>
                 <div className="stack mt-16">
                   {doctorProfiles.map((doctor) => {
-                    const shifts = shiftRows.filter((item) => item.staffOrDoctorId === doctor.id && item.dayOfWeek === selectedDayName && !item.isOnLeave);
+                    const shifts = shiftRows.filter((item) => item.staffOrDoctorId === doctor.id && item.dayOfWeek === selectedDayName && item.isActive !== false);
                     const available = doctor.status === "Active" && calendarSlots.some((time) =>
                       isDoctorAvailableForInterval({
                         doctorId: doctor.id,
@@ -676,8 +776,8 @@ function AppointmentChip({
       onTouchEnd={(event) => event.stopPropagation()}
     >
       <strong>{appointment.time}</strong>
-      <span>{patient ? fullPatientName(patient) : appointment.patientId}</span>
-      {!compact && <small>{doctor?.fullName}</small>}
+      <span>{appointment.patientName || (patient ? fullPatientName(patient) : appointment.patientId)}</span>
+      {!compact && <small>{appointment.doctorName || doctor?.fullName}</small>}
     </button>
   );
 }
@@ -827,4 +927,64 @@ function findPatient(patients: BackendPatient[], patientId?: string) {
 
 function findStaffProfile(profiles: BackendStaffProfile[], profileId?: string) {
   return profiles.find((profile) => profile.id === profileId) ?? getStaffProfileById(profileId);
+}
+
+function sortAppointments(appointments: BackendAppointment[]) {
+  return [...appointments].sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`));
+}
+
+function handleAuthError(error: unknown, clearSession: (message?: string) => void) {
+  if (isApiError(error) && error.status === 401) {
+    clearSession("Your session has expired. Please sign in again.");
+  }
+}
+
+function toAppointmentErrorMessage(error: unknown, fallback: string) {
+  if (isApiError(error)) {
+    if (error.status === 409) {
+      return "This appointment was updated elsewhere. Please refresh and try again.";
+    }
+
+    const validationMessage = formatValidationErrors(error.validationErrors);
+    if (validationMessage) {
+      return validationMessage;
+    }
+
+    return error.message || fallback;
+  }
+
+  if (error instanceof TypeError) {
+    return "Cannot reach the backend. Make sure the backend server is running and try again.";
+  }
+  if (error instanceof Error) {
+    return error.message || fallback;
+  }
+
+  return fallback;
+}
+
+function formatValidationErrors(errors: Record<string, string[]> | undefined) {
+  if (!errors) {
+    return "";
+  }
+
+  return Object.entries(errors)
+    .map(([field, messages]) => `${field}: ${messages.join(" ")}`)
+    .join(" ");
+}
+
+function toWorkflowAction(status: AppointmentStatus): AppointmentWorkflowAction {
+  const actions: Partial<Record<AppointmentStatus, AppointmentWorkflowAction>> = {
+    Arrived: "arrive",
+    "Checked-in": "check-in",
+    Cancelled: "cancel",
+    "No-show": "no-show",
+    Postponed: "postpone",
+    "Needs Reschedule": "mark-needs-reschedule",
+  };
+  const action = actions[status];
+  if (!action) {
+    throw new Error(`Unsupported appointment workflow status: ${status}.`);
+  }
+  return action;
 }

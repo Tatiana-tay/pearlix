@@ -5,7 +5,7 @@ import { getPatientById, getStaffProfileById, patients, staffProfiles } from "..
 import { routes } from "../../routes";
 import type { AppointmentStatus, BackendAppointment, BackendAppointmentChangeLog, BackendAvailabilityException, BackendPatient, BackendShift, BackendStaffProfile } from "../../types/models";
 import { addMinutes, intervalsOverlap, isDoctorAvailableForInterval, toDateTime } from "../../utils/availability";
-import { currency, fullPatientName } from "../../utils/format";
+import { fullPatientName } from "../../utils/format";
 import { loadMockShifts, saveActiveVisitAppointmentId } from "../../utils/mockClinicState";
 import { appointmentStatusTone } from "../../utils/statusStyles";
 import { Badge } from "../ui/Badge";
@@ -29,9 +29,9 @@ interface AppointmentModalProps {
   appointments?: BackendAppointment[];
   availabilityExceptions?: BackendAvailabilityException[];
   changeLogs?: BackendAppointmentChangeLog[];
-  onCreate?: (appointment: BackendAppointment) => void;
-  onUpdate?: (appointment: BackendAppointment) => void;
-  onStatusChange?: (appointment: BackendAppointment, status: AppointmentStatus) => void;
+  onCreate?: (appointment: BackendAppointment) => BackendAppointment | Promise<BackendAppointment> | void | Promise<void>;
+  onUpdate?: (appointment: BackendAppointment) => BackendAppointment | Promise<BackendAppointment> | void | Promise<void>;
+  onStatusChange?: (appointment: BackendAppointment, status: AppointmentStatus) => BackendAppointment | Promise<BackendAppointment> | void | Promise<void>;
   onRescheduleRequest?: (appointment: BackendAppointment) => void;
   onClose: () => void;
 }
@@ -70,9 +70,11 @@ export function AppointmentModal({
   const [editMode, setEditMode] = useState(mode === "new");
   const [displayedStatus, setDisplayedStatus] = useState<AppointmentStatus>("Scheduled");
   const [feedback, setFeedback] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     patientName: "",
-    doctorName: staffOptions.find((profile) => profile.role === "Doctor")?.fullName ?? staffOptions[0].fullName,
+    doctorName: staffOptions.find((profile) => profile.role === "Doctor")?.fullName ?? staffOptions[0]?.fullName ?? "",
     visitType: "Routine Checkup",
     date: slotDate,
     time: slotTime,
@@ -84,6 +86,8 @@ export function AppointmentModal({
     setEditMode(mode === "new");
     setDisplayedStatus(appointment?.status ?? "Scheduled");
     setFeedback("");
+    setSaveError("");
+    setSaving(false);
     const nextPatient = appointment
       ? getPatientById(appointment.patientId) ?? patientOptions.find((item) => item.patientId === appointment.patientId) ?? patientOptions[0]
       : initialPatientId
@@ -96,7 +100,7 @@ export function AppointmentModal({
       ?? staffProfiles[0];
     setForm({
       patientName: nextPatient ? fullPatientName(nextPatient) : "",
-      doctorName: nextDoctor.fullName,
+      doctorName: nextDoctor?.fullName ?? "",
       visitType: appointment?.visitType ?? "Routine Checkup",
       date: appointment?.date ?? slotDate,
       time: appointment?.time ?? slotTime,
@@ -183,74 +187,100 @@ export function AppointmentModal({
   const canReschedule = canManageAppointments && appointment?.status === "Needs Reschedule";
   const patientSelectOptions = ["Select patient", ...uniquePatientOptions.map(fullPatientName)];
 
-  const saveNewAppointment = () => {
+  const saveNewAppointment = async () => {
     if (!canSave || !selectedPatient || !selectedDoctor || mode !== "new") return;
-    onCreate?.({
+    setSaveError("");
+    setSaving(true);
+    try {
+      await onCreate?.({
       id: `APT-${Date.now()}`,
       patientId: selectedPatient.patientId,
       doctorId: selectedDoctor.id,
+      doctorProfileId: selectedDoctor.id,
       visitType: form.visitType,
       date: form.date,
       time: form.time,
       durationMinutes: parsedDuration,
-      due: 0,
       status: "Scheduled",
       notes: form.notes.trim(),
     });
-    onClose();
+      onClose();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Unable to save appointment.");
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const saveExistingAppointment = () => {
+  const saveExistingAppointment = async () => {
     if (!appointment || !canSave || !selectedPatient || !selectedDoctor || mode === "new") return;
     const updated: BackendAppointment = {
       ...appointment,
       patientId: selectedPatient.patientId,
       doctorId: selectedDoctor.id,
+      doctorProfileId: selectedDoctor.id,
       visitType: form.visitType,
       date: form.date,
       time: form.time,
       durationMinutes: parsedDuration,
       notes: form.notes.trim(),
     };
-    onUpdate?.(updated);
-    setDisplayedStatus(updated.status);
-    setFeedback("Appointment changes saved.");
-    setEditMode(false);
+    setSaveError("");
+    setSaving(true);
+    try {
+      const savedAppointment = await onUpdate?.(updated);
+      const nextAppointment = savedAppointment ?? updated;
+      setDisplayedStatus(nextAppointment.status);
+      setFeedback("Appointment changes saved.");
+      setEditMode(false);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Unable to save appointment.");
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const applyStatus = (status: AppointmentStatus) => {
+  const applyStatus = async (status: AppointmentStatus) => {
     if (!appointment) return;
-    setDisplayedStatus(status);
-    onStatusChange?.(appointment, status);
-    setFeedback(`Appointment marked ${status}.`);
+    setSaveError("");
+    setSaving(true);
+    try {
+      const savedAppointment = await onStatusChange?.(appointment, status);
+      setDisplayedStatus(savedAppointment?.status ?? status);
+      setFeedback(`Appointment marked ${savedAppointment?.status ?? status}.`);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Unable to update appointment status.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const openActiveVisit = () => {
     if (!appointment) return;
     saveActiveVisitAppointmentId(appointment.id);
     if (displayedStatus === "Checked-in") {
-      applyStatus("In Visit");
+      void applyStatus("In Visit");
     }
     navigate(routes.doctor.activeVisit);
   };
 
   const footer = editMode ? (
     <>
-      <Button variant="secondary" onClick={onClose}>Close</Button>
-      <Button disabled={!canSave} onClick={mode === "new" ? saveNewAppointment : saveExistingAppointment}>Save</Button>
+      <Button variant="secondary" disabled={saving} onClick={onClose}>Close</Button>
+      <Button disabled={!canSave || saving} onClick={() => { void (mode === "new" ? saveNewAppointment() : saveExistingAppointment()); }}>{saving ? "Saving..." : "Save"}</Button>
     </>
   ) : mode === "new" ? null : (
     <>
       {canManageAppointments && <Button variant="secondary" onClick={() => setEditMode(true)}>Edit</Button>}
       {canReschedule && appointment && <Button onClick={() => onRescheduleRequest?.(appointment)}>Reschedule</Button>}
       {canManageAppointments && nextStatus(displayedStatus) && (
-        <Button onClick={() => applyStatus(nextStatus(displayedStatus) ?? displayedStatus)}>
+        <Button disabled={saving} onClick={() => { void applyStatus(nextStatus(displayedStatus) ?? displayedStatus); }}>
           Mark {nextStatus(displayedStatus)}
         </Button>
       )}
-      {canManageAppointments && <Button variant="secondary" onClick={() => applyStatus("Postponed")}>Postpone</Button>}
-      {canManageAppointments && <Button variant="ghost" onClick={() => applyStatus("No-show")}>No-show</Button>}
-      {canManageAppointments && <Button variant="danger" onClick={() => applyStatus("Cancelled")}>Cancel Appointment</Button>}
+      {canManageAppointments && <Button variant="secondary" disabled={saving} onClick={() => { void applyStatus("Postponed"); }}>Postpone</Button>}
+      {canManageAppointments && <Button variant="ghost" disabled={saving} onClick={() => { void applyStatus("No-show"); }}>No-show</Button>}
+      {canManageAppointments && <Button variant="danger" disabled={saving} onClick={() => { void applyStatus("Cancelled"); }}>Cancel Appointment</Button>}
       {canStartVisit && <Button onClick={openActiveVisit}>{displayedStatus === "In Visit" ? "Continue Visit" : "Start Visit"}</Button>}
       {isReadOnly && <Button variant="secondary" onClick={onClose}>Close</Button>}
     </>
@@ -259,7 +289,7 @@ export function AppointmentModal({
   return (
     <Modal
       title={mode === "new" ? "New Appointment" : "Appointment Details"}
-      subtitle={mode === "new" ? "Book a clinic appointment with local mock data." : appointment?.id}
+      subtitle={mode === "new" ? "Book a clinic appointment." : appointment?.id}
       open={open}
       onClose={onClose}
       width={680}
@@ -280,30 +310,31 @@ export function AppointmentModal({
           {hasDoctorConflict && <div className="alert-card">This doctor already has an overlapping appointment. Choose another time or doctor.</div>}
           {doctorBlockedByLeave && <div className="alert-card">This doctor has an active leave exception covering that slot.</div>}
           {doctorOutsideWorkingHours && <div className="alert-card">This slot is outside the doctor's working hours.</div>}
+          {saveError && <div className="alert-card">{saveError}</div>}
         </div>
       ) : appointment ? (
         <div className="stack">
           {feedback && <div className="notice-card">{feedback}</div>}
+          {saveError && <div className="alert-card">{saveError}</div>}
           {displayedStatus === "Needs Reschedule" && (
             <div className="alert-card">
               This appointment needs reception follow-up before it can return to the normal schedule.
             </div>
           )}
           <div className="appointment-detail-grid">
-            <div><span>Patient</span><strong>{fullPatientName(patient)}</strong></div>
-            <div><span>Doctor</span><strong>{doctor.fullName}</strong></div>
+            <div><span>Patient</span><strong>{appointment.patientName || fullPatientName(patient) || appointment.patientId}</strong></div>
+            <div><span>Doctor</span><strong>{appointment.doctorName || doctor.fullName || appointment.doctorId}</strong></div>
             <div><span>Visit Type</span><strong>{appointment.visitType}</strong></div>
             <div><span>Date</span><strong>{appointment.date}</strong></div>
             <div><span>Time</span><strong>{appointment.time}</strong></div>
             <div><span>Duration</span><strong>{appointment.durationMinutes} minutes</strong></div>
-            <div><span>Due</span><strong>{currency(appointment.due)}</strong></div>
             <div><span>Status</span><Badge tone={appointmentStatusTone[displayedStatus]}>{displayedStatus}</Badge></div>
             <div className="span-2"><span>Notes</span><strong>{appointment.notes}</strong></div>
             {canManageAppointments && (
               <div className="span-2 right">
                 {canReschedule && <Button onClick={() => onRescheduleRequest?.(appointment)}>Reschedule</Button>}
-                <Button variant="ghost" onClick={() => applyStatus("No-show")}>Mark No-show</Button>
-                <Button variant="ghost" onClick={() => applyStatus("Postponed")}>Postpone</Button>
+                <Button variant="ghost" disabled={saving} onClick={() => { void applyStatus("No-show"); }}>Mark No-show</Button>
+                <Button variant="ghost" disabled={saving} onClick={() => { void applyStatus("Postponed"); }}>Postpone</Button>
               </div>
             )}
           </div>

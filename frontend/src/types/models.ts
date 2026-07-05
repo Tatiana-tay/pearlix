@@ -238,14 +238,24 @@ export interface BackendShift {
 export interface BackendAppointment {
   id: string;
   patientId: string;
+  patientName?: string;
   doctorId: string;
+  doctorProfileId?: string;
+  doctorName?: string;
+  startAt?: string;
+  endAt?: string;
   visitType: string;
   date: string;
   time: string;
+  endDate?: string;
+  endTime?: string;
   durationMinutes: number;
-  due: number;
+  due?: number;
   status: AppointmentStatus;
   notes: string;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface BackendAvailabilityException {

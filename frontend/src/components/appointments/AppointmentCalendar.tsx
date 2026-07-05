@@ -1,6 +1,6 @@
 import { Clock, UserRound } from "lucide-react";
 import { getPatientById, getStaffProfileById } from "../../data/adapters";
-import type { BackendAppointment } from "../../types/models";
+import type { BackendAppointment, BackendPatient, BackendStaffProfile } from "../../types/models";
 import { fullPatientName } from "../../utils/format";
 import { timePresetOptions } from "../../utils/shifts";
 import { appointmentStatusTone, appointmentStatusVisual } from "../../utils/statusStyles";
@@ -12,9 +12,11 @@ interface AppointmentCalendarProps {
   onSlotClick: (time: string) => void;
   canCreate?: boolean;
   isSlotAvailable?: (time: string) => boolean;
+  patientOptions?: BackendPatient[];
+  staffOptions?: BackendStaffProfile[];
 }
 
-export function AppointmentCalendar({ appointments, onAppointmentClick, onSlotClick, canCreate = true, isSlotAvailable = () => true }: AppointmentCalendarProps) {
+export function AppointmentCalendar({ appointments, onAppointmentClick, onSlotClick, canCreate = true, isSlotAvailable = () => true, patientOptions = [], staffOptions = [] }: AppointmentCalendarProps) {
   return (
     <div className="schedule-list">
       {timePresetOptions.map((slot) => {
@@ -27,8 +29,8 @@ export function AppointmentCalendar({ appointments, onAppointmentClick, onSlotCl
             {slotAppointments.length > 0 ? (
               <div className="schedule-slot-stack">
                 {slotAppointments.map((appointment) => {
-                  const patient = getPatientById(appointment.patientId);
-                  const doctor = getStaffProfileById(appointment.doctorId);
+                  const patient = patientOptions.find((item) => item.patientId === appointment.patientId) ?? getPatientById(appointment.patientId);
+                  const doctor = staffOptions.find((item) => item.id === appointment.doctorId) ?? getStaffProfileById(appointment.doctorId);
                   const visual = appointmentStatusVisual[appointment.status];
                   return (
                     <button
@@ -42,10 +44,10 @@ export function AppointmentCalendar({ appointments, onAppointmentClick, onSlotCl
                       onClick={() => onAppointmentClick(appointment)}
                     >
                       <div>
-                        <strong>{patient ? fullPatientName(patient) : appointment.patientId}</strong>
+                        <strong>{appointment.patientName || (patient ? fullPatientName(patient) : appointment.patientId)}</strong>
                         <span>{appointment.visitType}</span>
                         <small>
-                          <UserRound size={13} /> {doctor?.fullName} <Clock size={13} /> {appointment.durationMinutes} min
+                          <UserRound size={13} /> {appointment.doctorName || doctor?.fullName} <Clock size={13} /> {appointment.durationMinutes} min
                         </small>
                       </div>
                       <Badge tone={appointmentStatusTone[appointment.status]}>{appointment.status}</Badge>

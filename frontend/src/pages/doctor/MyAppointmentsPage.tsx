@@ -1,6 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { adaptAppointmentDTO, listAppointments } from "../../api/appointments";
+import { getCurrentEmployeeProfile, adaptEmployeeProfileDTO } from "../../api/employeeProfiles";
+import { isApiError } from "../../api/errors";
 import { AppointmentModal } from "../../components/appointments/AppointmentModal";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { PatientProfileDrawer } from "../../components/patients/PatientProfileDrawer";
@@ -10,30 +13,68 @@ import { Card } from "../../components/ui/Card";
 import { FilterPopover } from "../../components/ui/FilterPopover";
 import { Input } from "../../components/ui/Input";
 import { Select } from "../../components/ui/Select";
-import { useCurrentUser } from "../../context/SessionContext";
-import { getPatientById, patients } from "../../data/adapters";
+import { useCurrentUser, useSession } from "../../context/SessionContext";
+import { getPatientById } from "../../data/adapters";
 import { routes } from "../../routes";
-import type { AppointmentStatus, BackendAppointment, BackendPatient } from "../../types/models";
+import type { BackendAppointment, BackendPatient, BackendStaffProfile } from "../../types/models";
 import { fullPatientName } from "../../utils/format";
-import { getMockStaffProfileForUser, loadMockPatients, loadMockShifts, loadMockStaffProfiles, saveActiveVisitAppointmentId } from "../../utils/mockClinicState";
-import { loadMockAppointments, loadMockAvailabilityExceptions, saveMockAppointments } from "../../utils/mockScheduleState";
+import { saveActiveVisitAppointmentId } from "../../utils/mockClinicState";
 import { appointmentStatusTone } from "../../utils/statusStyles";
 
 export function MyAppointmentsPage() {
   const navigate = useNavigate();
   const currentUser = useCurrentUser();
+  const { accessToken, clearSession } = useSession();
   const [selectedAppointment, setSelectedAppointment] = useState<BackendAppointment | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [visitTypeFilter, setVisitTypeFilter] = useState("All");
   const [selectedPatient, setSelectedPatient] = useState<BackendPatient | null>(null);
-  const [allAppointments, setAllAppointments] = useState<BackendAppointment[]>(loadMockAppointments);
-  const patientRows = useMemo(loadMockPatients, []);
-  const staffProfiles = useMemo(loadMockStaffProfiles, []);
-  const shifts = useMemo(loadMockShifts, []);
-  const doctorProfile = getMockStaffProfileForUser(currentUser, staffProfiles);
-  const appointments = allAppointments.filter((appointment) => appointment.doctorId === doctorProfile?.id);
+  const [appointments, setAppointments] = useState<BackendAppointment[]>([]);
+  const [doctorProfile, setDoctorProfile] = useState<BackendStaffProfile | null>(null);
+  const [loadingAppointments, setLoadingAppointments] = useState(true);
+  const [pageError, setPageError] = useState("");
+  const patientRows = useMemo<BackendPatient[]>(() => [], []);
+  const staffProfiles = useMemo(() => doctorProfile ? [doctorProfile] : [], [doctorProfile]);
   const visitTypes = useMemo(() => ["All", ...Array.from(new Set(appointments.map((appointment) => appointment.visitType)))], [appointments]);
+
+  useEffect(() => {
+    if (!accessToken) {
+      setLoadingAppointments(false);
+      setPageError("Sign in again to view your appointments.");
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingAppointments(true);
+    setPageError("");
+
+    Promise.all([
+      listAppointments({ accessToken }),
+      getCurrentEmployeeProfile({ accessToken }),
+    ])
+      .then(([appointmentResults, profile]) => {
+        if (cancelled) return;
+        const adaptedProfile = adaptEmployeeProfileDTO(profile);
+        setDoctorProfile(adaptedProfile);
+        setAppointments(appointmentResults.map(adaptAppointmentDTO));
+        setPageError("");
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        handleAuthError(error, clearSession);
+        setPageError(toAppointmentErrorMessage(error, "Unable to load your appointments."));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingAppointments(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, clearSession]);
 
   const filteredAppointments = useMemo(() => {
     const normalized = query.toLowerCase();
@@ -48,25 +89,15 @@ export function MyAppointmentsPage() {
 
   const activeFilters = (statusFilter !== "All" ? 1 : 0) + (visitTypeFilter !== "All" ? 1 : 0);
 
-  const saveAppointmentStatus = (appointment: BackendAppointment, status: AppointmentStatus) => {
-    const updatedAppointment = { ...appointment, status };
-    const nextAppointments = allAppointments.map((item) => item.id === appointment.id ? updatedAppointment : item);
-    setAllAppointments(nextAppointments);
-    saveMockAppointments(nextAppointments);
-    setSelectedAppointment((current) => current?.id === appointment.id ? updatedAppointment : current);
-  };
-
   const openActiveVisit = (appointment: BackendAppointment) => {
     saveActiveVisitAppointmentId(appointment.id);
-    if (appointment.status === "Checked-in") {
-      saveAppointmentStatus(appointment, "In Visit");
-    }
     navigate(routes.doctor.activeVisit);
   };
 
   return (
     <div className="page-shell">
       <PageHeader title="My Appointments" subtitle="Doctor-focused appointment schedule." />
+      {pageError && <div className="alert-card">{pageError}</div>}
       <Card>
         <div className="filter-card">
           <Input icon={<Search size={18} />} placeholder="Search appointments by patient, visit type, date, or time..." value={query} onChange={(event) => setQuery(event.target.value)} />
@@ -102,7 +133,7 @@ export function MyAppointmentsPage() {
             </thead>
             <tbody>
               {filteredAppointments.map((appointment) => {
-                const patient = patientRows.find((item) => item.patientId === appointment.patientId) ?? patients.find((item) => item.patientId === appointment.patientId);
+                const patient = patientRows.find((item) => item.patientId === appointment.patientId);
                 const canOpenVisit = appointment.status === "Checked-in" || appointment.status === "In Visit";
                 return (
                   <tr
@@ -119,7 +150,7 @@ export function MyAppointmentsPage() {
                     }}
                   >
                     <td>{appointment.date} - {appointment.time}</td>
-                    <td>{patient ? fullPatientName(patient) : appointment.patientId}</td>
+                    <td>{appointment.patientName || (patient ? fullPatientName(patient) : appointment.patientId)}</td>
                     <td>{appointment.visitType}</td>
                     <td><Badge tone={appointmentStatusTone[appointment.status]}>{appointment.status}</Badge></td>
                     <td>
@@ -162,21 +193,39 @@ export function MyAppointmentsPage() {
               })}
             </tbody>
           </table>
+          {loadingAppointments && <div className="empty-inline">Loading appointments...</div>}
+          {!loadingAppointments && filteredAppointments.length === 0 && <div className="empty-inline">No appointments found.</div>}
         </div>
       </Card>
       <AppointmentModal
         appointment={selectedAppointment}
         mode="view"
-        appointments={allAppointments}
+        appointments={appointments}
         patientOptions={patientRows}
         staffOptions={staffProfiles}
-        shifts={shifts}
-        availabilityExceptions={loadMockAvailabilityExceptions()}
         open={Boolean(selectedAppointment)}
         onClose={() => setSelectedAppointment(null)}
-        onStatusChange={saveAppointmentStatus}
       />
       <PatientProfileDrawer open={Boolean(selectedPatient)} onClose={() => setSelectedPatient(null)} patient={selectedPatient} canEdit />
     </div>
   );
+}
+
+function handleAuthError(error: unknown, clearSession: (message?: string) => void) {
+  if (isApiError(error) && error.status === 401) {
+    clearSession("Your session has expired. Please sign in again.");
+  }
+}
+
+function toAppointmentErrorMessage(error: unknown, fallback: string) {
+  if (isApiError(error)) {
+    return error.message || fallback;
+  }
+  if (error instanceof TypeError) {
+    return "Cannot reach the backend. Make sure the backend server is running and try again.";
+  }
+  if (error instanceof Error) {
+    return error.message || fallback;
+  }
+  return fallback;
 }
