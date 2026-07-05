@@ -120,9 +120,10 @@ export function PatientsPage() {
 
     try {
       const createdPatient = adaptPatientDTO(await createPatient(payload, { accessToken }));
-      setPatientRows((current) => [...current, createdPatient]);
+      setPatientRows((current) => [createdPatient, ...current]);
       setSelectedPatient(createdPatient);
       setDrawerOpen(true);
+      setPageError("");
     } catch (error) {
       handleAuthError(error, clearSession);
       throw new Error(toPatientErrorMessage(error, "Unable to create patient."));

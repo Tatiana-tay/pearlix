@@ -445,6 +445,99 @@ describe("mock persistence and billing calculations", () => {
     expect(screen.queryByText("Cannot reach the backend. Make sure the backend server is running and try again.")).not.toBeInTheDocument();
   });
 
+  it("places a newly created backend patient at the top and uses response fields immediately", async () => {
+    const user = userEvent.setup();
+    seedAuthSession();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/api/patients/") && method === "GET") {
+        return new Response(JSON.stringify({
+          results: [
+            {
+              id: 11,
+              patientId: 11,
+              firstName: "Existing",
+              lastName: "Patient",
+              fullName: "Existing Patient",
+              gender: "Male",
+              dateOfBirth: "1990-01-01",
+              age: 36,
+              phoneNumber: "0111111111",
+              version: 1,
+            },
+          ],
+        }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      if (url.endsWith("/api/patients/") && method === "POST") {
+        return new Response(JSON.stringify({
+          id: 22,
+          patientId: 22,
+          firstName: "Newest",
+          lastName: "Patient",
+          fullName: "Newest Patient",
+          gender: "Female",
+          dateOfBirth: "2002-07-02",
+          age: 24,
+          phoneNumber: "0222222222",
+          email: "newest.patient@example.com",
+          nationalIdOrPassport: "NID-NEWEST",
+          version: 7,
+        }), { headers: { "Content-Type": "application/json" }, status: 201 });
+      }
+      if (url.endsWith("/api/patients/22/") && method === "PATCH") {
+        expect(JSON.parse(String(init?.body))).toEqual(expect.objectContaining({ version: 7 }));
+        return new Response(JSON.stringify({
+          id: 22,
+          patientId: 22,
+          firstName: "Newest",
+          lastName: "Patient",
+          fullName: "Newest Patient",
+          gender: "Female",
+          dateOfBirth: "2002-07-02",
+          age: 24,
+          phoneNumber: "0222222222",
+          email: "newest.patient@example.com",
+          nationalIdOrPassport: "NID-NEWEST",
+          version: 8,
+        }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      return new Response(JSON.stringify({ detail: "Not found." }), { headers: { "Content-Type": "application/json" }, status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter>
+        <SessionProvider validateStoredSession={false}>
+          <PatientsPage />
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Existing Patient")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add Patient" }));
+    await user.type(screen.getByLabelText("First Name"), "Newest");
+    await user.type(screen.getByLabelText("Last Name"), "Patient");
+    await user.type(screen.getByLabelText("National ID / Passport"), "NID-NEWEST");
+    fireEvent.change(screen.getByLabelText("Date of Birth"), { target: { value: "2002-07-02" } });
+    fireEvent.change(screen.getByLabelText("Sex"), { target: { value: "Female" } });
+    await user.type(screen.getByLabelText("Phone Number"), "0222222222");
+    await user.type(screen.getByLabelText("Email"), "newest.patient@example.com");
+    await user.click(screen.getByRole("button", { name: "Create Patient" }));
+
+    await screen.findByRole("heading", { name: "All Patients (2)" });
+    const rows = Array.from(document.querySelectorAll(".data-table tbody tr"));
+    expect(rows[0].textContent).toContain("Newest Patient");
+    expect(rows[0].textContent).toContain("24 years");
+    expect(rows[1].textContent).toContain("Existing Patient");
+    expect(screen.queryByText("Cannot reach the backend. Make sure the backend server is running and try again.")).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input, init]) => String(input).endsWith("/api/patients/") && ((init as RequestInit | undefined)?.method ?? "GET") === "GET")).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/patients/22/"), expect.objectContaining({ method: "PATCH" })));
+  });
+
   it("saves and reloads patient create/edit data from localStorage", () => {
     const patient: BackendPatient = {
       patientId: "PT-LOCAL",
