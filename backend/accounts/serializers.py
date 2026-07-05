@@ -9,6 +9,8 @@ User = get_user_model()
 class UserSerializer(serializers.ModelSerializer):
     fullName = serializers.CharField(source="full_name")
     mustChangePassword = serializers.BooleanField(source="must_change_password")
+    createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+    phone = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -16,11 +18,19 @@ class UserSerializer(serializers.ModelSerializer):
             "id",
             "username",
             "email",
+            "phone",
             "fullName",
             "role",
             "status",
+            "createdAt",
             "mustChangePassword",
         )
+
+    def get_phone(self, obj):
+        profile = getattr(obj, "employee_profile", None)
+        if profile is None:
+            return ""
+        return profile.phone or ""
 
 
 class LoginSerializer(serializers.Serializer):

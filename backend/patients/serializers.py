@@ -5,6 +5,7 @@ from .models import Patient
 
 
 class PatientSerializer(serializers.ModelSerializer):
+    patientId = serializers.IntegerField(source="id", read_only=True)
     firstName = serializers.CharField(source="first_name")
     lastName = serializers.CharField(source="last_name")
     fullName = serializers.CharField(source="full_name", read_only=True)
@@ -48,6 +49,7 @@ class PatientSerializer(serializers.ModelSerializer):
         model = Patient
         fields = (
             "id",
+            "patientId",
             "firstName",
             "lastName",
             "fullName",
@@ -66,7 +68,15 @@ class PatientSerializer(serializers.ModelSerializer):
             "createdAt",
             "updatedAt",
         )
-        read_only_fields = ("id", "fullName", "age", "version", "createdAt", "updatedAt")
+        read_only_fields = (
+            "id",
+            "patientId",
+            "fullName",
+            "age",
+            "version",
+            "createdAt",
+            "updatedAt",
+        )
 
     def validate_dateOfBirth(self, value):
         if value and value > timezone.localdate():
