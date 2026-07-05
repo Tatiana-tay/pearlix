@@ -104,8 +104,8 @@ export function XrayViewer({ result, findings, attachment, onRetryAnalysis }: Xr
         </div>
         <dl className="detail-list">
           <div><dt>X-ray File</dt><dd>{attachment?.fileName ?? result.fileId}</dd></div>
-          <div><dt>Base Layer</dt><dd>{attachment?.filePath ?? "mock panoramic fallback"}</dd></div>
-          <div><dt>AI Overlay</dt><dd>{result.overlayFilePath || "Not available"}</dd></div>
+          <div><dt>Base Layer</dt><dd>{attachment ? "Authorized attachment preview" : "Viewer placeholder"}</dd></div>
+          <div><dt>AI Overlay</dt><dd>{result.overlayUrl ? "Available from backend" : "Not available"}</dd></div>
           <div><dt>Model Version</dt><dd>{result.modelVersion}</dd></div>
           <div><dt>Processed Date</dt><dd>{result.processedDate}</dd></div>
           <div><dt>Overall Confidence</dt><dd>{Math.round(result.overallConfidence * 100)}%</dd></div>
