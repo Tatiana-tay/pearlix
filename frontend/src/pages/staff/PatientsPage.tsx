@@ -55,6 +55,7 @@ export function PatientsPage() {
           return;
         }
         setPatientRows(patients.map(adaptPatientDTO));
+        setPageError("");
       })
       .catch((error: unknown) => {
         if (cancelled) {

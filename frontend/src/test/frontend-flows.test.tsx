@@ -15,6 +15,7 @@ import { Modal } from "../components/ui/Modal";
 import { authAccessTokenStorageKey, authRefreshTokenStorageKey, authUserStorageKey, SessionProvider, useSession } from "../context/SessionContext";
 import { navConfig } from "../navigation/navConfig";
 import { UsersPage } from "../pages/admin/UsersPage";
+import { PatientsPage } from "../pages/staff/PatientsPage";
 import { SettingsPage } from "../pages/shared/SettingsPage";
 import { routes } from "../routes";
 import type { BackendAIResult, BackendAppointment, BackendAvailabilityException, BackendInvoice, BackendPatient, BackendShift, BackendStaffProfile, User } from "../types/models";
@@ -268,6 +269,44 @@ describe("appointment scheduling logic", () => {
 });
 
 describe("mock persistence and billing calculations", () => {
+  it("renders backend patient list results without showing a backend reachability error", async () => {
+    seedAuthSession();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/patients/")) {
+        return new Response(JSON.stringify({
+          results: [
+            {
+              id: 11,
+              patientId: 11,
+              firstName: "Boom",
+              lastName: "Ph",
+              fullName: "Boom Ph",
+              gender: "Male",
+              dateOfBirth: "2002-07-02",
+              age: 24,
+              phoneNumber: "0999999999",
+              version: 1,
+            },
+          ],
+        }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      return new Response(JSON.stringify({ detail: "Not found." }), { headers: { "Content-Type": "application/json" }, status: 404 });
+    }));
+
+    render(
+      <MemoryRouter>
+        <SessionProvider validateStoredSession={false}>
+          <PatientsPage />
+        </SessionProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Boom Ph")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "All Patients (1)" })).toBeInTheDocument();
+    expect(screen.queryByText("Cannot reach the backend. Make sure the backend server is running and try again.")).not.toBeInTheDocument();
+  });
+
   it("saves and reloads patient create/edit data from localStorage", () => {
     const patient: BackendPatient = {
       patientId: "PT-LOCAL",

@@ -7,21 +7,21 @@ export interface PatientDTO {
   patientId: number | string;
   firstName: string;
   lastName: string;
-  fullName: string;
+  fullName?: string;
   gender: Gender;
   dateOfBirth: string;
   age: number;
   phoneNumber: string;
   email?: string;
-  nationalIdOrPassport: string;
-  address: string;
-  medicalConditionsHistory: string;
-  bloodGroup: string;
-  insuranceInfo: string;
-  emergencyContact: string;
+  nationalIdOrPassport?: string;
+  address?: string;
+  medicalConditionsHistory?: string;
+  bloodGroup?: string;
+  insuranceInfo?: string;
+  emergencyContact?: string;
   version: number;
-  createdAt: string;
-  updatedAt: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface PatientPayload {
@@ -43,12 +43,17 @@ export interface PatientUpdatePayload extends Partial<PatientPayload> {
   version: number;
 }
 
+interface PatientListResponse {
+  results: PatientDTO[];
+}
+
 type AuthenticatedOptions = Omit<RequestOptions, "body" | "method"> & {
   accessToken: string;
 };
 
-export function listPatients(options: AuthenticatedOptions) {
-  return apiClient.get<PatientDTO[]>("/api/patients/", options);
+export async function listPatients(options: AuthenticatedOptions) {
+  const response = await apiClient.get<PatientDTO[] | PatientListResponse>("/api/patients/", options);
+  return Array.isArray(response) ? response : response.results;
 }
 
 export function createPatient(payload: PatientPayload, options: AuthenticatedOptions) {
@@ -70,17 +75,17 @@ export function adaptPatientDTO(patient: PatientDTO): BackendPatient {
     firstName: patient.firstName,
     lastName: patient.lastName,
     fullName: patient.fullName,
-    nationalIdOrPassport: patient.nationalIdOrPassport,
+    nationalIdOrPassport: patient.nationalIdOrPassport ?? "",
     dateOfBirth: patient.dateOfBirth,
     age: patient.age,
     gender: patient.gender,
     phoneNumber: patient.phoneNumber,
-    medicalConditionsHistory: patient.medicalConditionsHistory,
-    bloodGroup: patient.bloodGroup,
-    insuranceInfo: patient.insuranceInfo,
-    emergencyContact: patient.emergencyContact,
-    address: patient.address,
-    createdAt: patient.createdAt,
+    medicalConditionsHistory: patient.medicalConditionsHistory ?? "",
+    bloodGroup: patient.bloodGroup ?? "",
+    insuranceInfo: patient.insuranceInfo ?? "",
+    emergencyContact: patient.emergencyContact ?? "",
+    address: patient.address ?? "",
+    createdAt: patient.createdAt ?? "",
     updatedAt: patient.updatedAt,
     version: patient.version,
     email: patient.email ?? "",
