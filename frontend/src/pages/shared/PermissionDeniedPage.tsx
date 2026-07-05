@@ -6,6 +6,8 @@ import { useSession } from "../../context/SessionContext";
 
 export function PermissionDeniedPage() {
   const { currentUser } = useSession();
+  const targetRoute = currentUser ? roleHome[currentUser.role] : "/login";
+  const buttonLabel = currentUser ? "Go to my dashboard" : "Go to login";
 
   return (
     <main className="auth-page">
@@ -13,10 +15,10 @@ export function PermissionDeniedPage() {
         <EmptyState
           kind="permission"
           title="Permission denied"
-          description="Your current mock role cannot access this route."
+          description="Your current role cannot access this route."
           action={
-            <Link to={roleHome[currentUser.role]}>
-              <Button>Go to my dashboard</Button>
+            <Link to={targetRoute}>
+              <Button>{buttonLabel}</Button>
             </Link>
           }
         />

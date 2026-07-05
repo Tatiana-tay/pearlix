@@ -6,7 +6,7 @@ import { Badge } from "../../components/ui/Badge";
 import { Card } from "../../components/ui/Card";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { StatCard } from "../../components/ui/StatCard";
-import { useSession } from "../../context/SessionContext";
+import { useCurrentUser } from "../../context/SessionContext";
 import { getPatientById } from "../../data/adapters";
 import type { AppointmentStatus, BackendAppointment } from "../../types/models";
 import { fullPatientName } from "../../utils/format";
@@ -17,7 +17,7 @@ import { appointmentStatusTone } from "../../utils/statusStyles";
 type AppointmentFilter = "Upcoming" | "Active" | "Completed" | "Cancelled / No-show";
 
 export function DoctorDashboardPage() {
-  const { currentUser } = useSession();
+  const currentUser = useCurrentUser();
   const [appointmentFilter, setAppointmentFilter] = useState<AppointmentFilter>("Upcoming");
   const [selectedAppointment, setSelectedAppointment] = useState<BackendAppointment | null>(null);
   const [appointments, setAppointments] = useState<BackendAppointment[]>(loadMockAppointments);

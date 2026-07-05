@@ -6,6 +6,8 @@ import { roleHome } from "../../navigation/navConfig";
 
 export function NotFoundPage() {
   const { currentUser } = useSession();
+  const targetRoute = currentUser ? roleHome[currentUser.role] : "/login";
+  const buttonLabel = currentUser ? "Go to dashboard" : "Go to login";
 
   return (
     <main className="auth-page">
@@ -13,7 +15,7 @@ export function NotFoundPage() {
         <EmptyState
           title="Page not found"
           description="The route is not part of the DentalCare prototype."
-          action={<Link to={roleHome[currentUser.role]}><Button>Go to dashboard</Button></Link>}
+          action={<Link to={targetRoute}><Button>{buttonLabel}</Button></Link>}
         />
       </div>
     </main>

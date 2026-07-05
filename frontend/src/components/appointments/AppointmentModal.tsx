@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useSession } from "../../context/SessionContext";
+import { useCurrentUser } from "../../context/SessionContext";
 import { getPatientById, getStaffProfileById, patients, staffProfiles } from "../../data/adapters";
 import { routes } from "../../routes";
 import type { AppointmentStatus, BackendAppointment, BackendAppointmentChangeLog, BackendAvailabilityException, BackendPatient, BackendShift, BackendStaffProfile } from "../../types/models";
@@ -66,7 +66,7 @@ export function AppointmentModal({
   onClose,
 }: AppointmentModalProps) {
   const navigate = useNavigate();
-  const { currentUser } = useSession();
+  const currentUser = useCurrentUser();
   const [editMode, setEditMode] = useState(mode === "new");
   const [displayedStatus, setDisplayedStatus] = useState<AppointmentStatus>("Scheduled");
   const [feedback, setFeedback] = useState("");

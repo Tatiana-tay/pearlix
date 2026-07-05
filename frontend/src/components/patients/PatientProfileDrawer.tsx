@@ -11,7 +11,7 @@ import {
   invoices,
   patients,
 } from "../../data/adapters";
-import { useSession } from "../../context/SessionContext";
+import { useCurrentUser } from "../../context/SessionContext";
 import type { BackendAIResult, BackendAIResultFinding, BackendAppointment, BackendAttachment, BackendInvoice, BackendPatient, BackendVisit, Invoice } from "../../types/models";
 import { ageFromDate, currency, fullPatientName, initials, prettyDate } from "../../utils/format";
 import { loadMockAppointments, loadMockAvailabilityExceptions, saveMockAppointments } from "../../utils/mockScheduleState";
@@ -54,7 +54,7 @@ const blankPatient: BackendPatient = {
 };
 
 export function PatientProfileDrawer({ open, onClose, patient, canEdit = true, readOnlyBilling = false, onSavePatient }: PatientProfileDrawerProps) {
-  const { currentUser } = useSession();
+  const currentUser = useCurrentUser();
   const [activeTab, setActiveTab] = useState("general");
   const [editMode, setEditMode] = useState(false);
   const [localPatient, setLocalPatient] = useState<BackendPatient>(patient ?? blankPatient);

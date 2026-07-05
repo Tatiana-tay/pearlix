@@ -14,7 +14,7 @@ import { StatCard } from "../../components/ui/StatCard";
 import { Tabs } from "../../components/ui/Tabs";
 import { Textarea } from "../../components/ui/Textarea";
 import { TimeInput } from "../../components/ui/TimeInput";
-import { useSession } from "../../context/SessionContext";
+import { useCurrentUser } from "../../context/SessionContext";
 import { getPatientById, getShiftsForStaffProfile, getStaffProfileById, staffProfiles as initialStaffProfiles } from "../../data/adapters";
 import type { AvailabilityException, BackendAppointment, BackendAvailabilityException, BackendShift, BackendStaffProfile, Gender, ProfileStatus } from "../../types/models";
 import { appointmentEnd, appointmentStart, detectAffectedAppointments, hasOverlappingException, intervalsOverlap, toDateTime, toLocalDateTime } from "../../utils/availability";
@@ -46,7 +46,7 @@ interface StaffFormState {
 const leaveReasons: AvailabilityException["reason"][] = ["Leave", "Sick Leave", "Personal", "Training", "Emergency", "Other"];
 
 export function DoctorsStaffPage({ readOnly = false }: DoctorsStaffPageProps) {
-  const { currentUser } = useSession();
+  const currentUser = useCurrentUser();
   const [profiles, setProfiles] = useState<BackendStaffProfile[]>(loadMockStaffProfiles);
   const [shiftRows, setShiftRows] = useState<BackendShift[]>(loadMockShifts);
   const [appointmentRows, setAppointmentRows] = useState<BackendAppointment[]>(loadMockAppointments);

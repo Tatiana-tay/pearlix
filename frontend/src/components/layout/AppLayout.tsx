@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
-import { useSession } from "../../context/SessionContext";
+import { useCurrentUser } from "../../context/SessionContext";
 import type { Role } from "../../types/models";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
@@ -15,7 +15,7 @@ export function AppLayout({ role }: AppLayoutProps) {
     if (typeof window === "undefined") return "light";
     return window.localStorage.getItem("dentalcare.theme") === "dark" ? "dark" : "light";
   });
-  const { currentUser } = useSession();
+  const currentUser = useCurrentUser();
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;

@@ -16,8 +16,8 @@ export function Sidebar({ role, collapsed, onToggle }: SidebarProps) {
   const navigate = useNavigate();
   const { logout } = useSession();
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate(routes.auth.login);
   };
 

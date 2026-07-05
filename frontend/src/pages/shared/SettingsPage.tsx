@@ -5,14 +5,14 @@ import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { Input } from "../../components/ui/Input";
 import { Select } from "../../components/ui/Select";
-import { useSession } from "../../context/SessionContext";
+import { useCurrentUser } from "../../context/SessionContext";
 import { getShiftsForStaffProfile, staffProfiles } from "../../data/adapters";
 import { initials, prettyDate } from "../../utils/format";
 import { loadMockAppointments, loadMockAvailabilityExceptions } from "../../utils/mockScheduleState";
 import { appointmentStatusTone, userStatusTone } from "../../utils/statusStyles";
 
 export function SettingsPage() {
-  const { currentUser } = useSession();
+  const currentUser = useCurrentUser();
   const isAdmin = currentUser.role === "Admin";
   const profile = staffProfiles.find((item) => item.userId === currentUser.id);
   const shifts = profile ? getShiftsForStaffProfile(profile.id) : [];

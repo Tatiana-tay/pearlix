@@ -9,14 +9,14 @@ import { Card } from "../../components/ui/Card";
 import { FilterPopover } from "../../components/ui/FilterPopover";
 import { Input } from "../../components/ui/Input";
 import { Select } from "../../components/ui/Select";
-import { useSession } from "../../context/SessionContext";
+import { useCurrentUser } from "../../context/SessionContext";
 import { appointments, visits } from "../../data/adapters";
 import type { BackendPatient } from "../../types/models";
 import { ageFromDate, fullPatientName, initials, prettyDate } from "../../utils/format";
 import { loadMockPatients, saveMockPatients } from "../../utils/mockClinicState";
 
 export function PatientsPage() {
-  const { currentUser } = useSession();
+  const currentUser = useCurrentUser();
   const [query, setQuery] = useState("");
   const [genderFilter, setGenderFilter] = useState("All");
   const [bloodFilter, setBloodFilter] = useState("All");

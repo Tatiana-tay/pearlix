@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import type { ReactNode } from "react";
 import { AppLayout } from "./components/layout/AppLayout";
 import { useSession } from "./context/SessionContext";
@@ -24,17 +24,53 @@ import { routes } from "./routes";
 import type { Role } from "./types/models";
 
 function RoleGate({ role, children }: { role: Role; children: ReactNode }) {
-  const { currentUser } = useSession();
+  const { authStatus, currentUser } = useSession();
+  const location = useLocation();
+
+  if (authStatus === "loading") {
+    return <SessionLoadingPage />;
+  }
+  if (!currentUser) {
+    return <Navigate to={routes.auth.login} replace state={{ from: location.pathname }} />;
+  }
+
   return currentUser.role === role ? children : <PermissionDeniedPage />;
 }
 
-export default function App() {
-  const { currentUser } = useSession();
+function HomeRedirect() {
+  const { authStatus, currentUser } = useSession();
 
+  if (authStatus === "loading") {
+    return <SessionLoadingPage />;
+  }
+  return currentUser ? <Navigate to={roleHome[currentUser.role]} replace /> : <Navigate to={routes.auth.login} replace />;
+}
+
+function LoginRoute() {
+  const { authStatus, currentUser } = useSession();
+
+  if (authStatus === "loading") {
+    return <SessionLoadingPage />;
+  }
+  return currentUser ? <Navigate to={roleHome[currentUser.role]} replace /> : <LoginPage />;
+}
+
+function SessionLoadingPage() {
+  return (
+    <main className="auth-page">
+      <section className="auth-card stack" aria-live="polite">
+        <strong>DentalCare</strong>
+        <p className="page-subtitle">Checking your session...</p>
+      </section>
+    </main>
+  );
+}
+
+export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to={roleHome[currentUser.role]} replace />} />
-      <Route path="/login" element={<LoginPage />} />
+      <Route path="/" element={<HomeRedirect />} />
+      <Route path="/login" element={<LoginRoute />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
 

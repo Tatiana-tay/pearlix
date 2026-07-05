@@ -1,4 +1,5 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { useState } from "react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
@@ -11,19 +12,128 @@ import { StaffProfileDrawer } from "../components/staff/StaffProfileDrawer";
 import { DataTable, type DataColumn } from "../components/tables/DataTable";
 import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
-import { SessionProvider } from "../context/SessionContext";
-import { demoSessionStorageKey } from "../data/mockSession";
+import { authAccessTokenStorageKey, authRefreshTokenStorageKey, authUserStorageKey, SessionProvider, useSession } from "../context/SessionContext";
 import { navConfig } from "../navigation/navConfig";
 import { UsersPage } from "../pages/admin/UsersPage";
 import { SettingsPage } from "../pages/shared/SettingsPage";
 import { routes } from "../routes";
-import type { BackendAIResult, BackendAppointment, BackendAvailabilityException, BackendInvoice, BackendPatient, BackendShift, BackendStaffProfile } from "../types/models";
+import type { BackendAIResult, BackendAppointment, BackendAvailabilityException, BackendInvoice, BackendPatient, BackendShift, BackendStaffProfile, User } from "../types/models";
 import { addMinutes, intervalsOverlap, isDoctorAvailableForInterval, toDateTime } from "../utils/availability";
 import { ageFromDate } from "../utils/format";
 import { calculateInvoiceStatus, loadMockPatients, saveMockPatients } from "../utils/mockClinicState";
 
 beforeEach(() => {
+  vi.unstubAllGlobals();
   window.localStorage.clear();
+});
+
+const testStaffUser: User = {
+  id: "USR-002",
+  fullName: "Olivia Frontdesk",
+  username: "olivia.frontdesk",
+  email: "staff@example.com",
+  phone: "(555) 010-1000",
+  role: "Staff",
+  status: "Active",
+  createdAt: "2026-01-01T00:00:00Z",
+  mustChangePassword: false,
+};
+
+function seedAuthSession(user: User = testStaffUser) {
+  window.localStorage.setItem(authAccessTokenStorageKey, "test-access-token");
+  window.localStorage.setItem(authRefreshTokenStorageKey, "test-refresh-token");
+  window.localStorage.setItem(authUserStorageKey, JSON.stringify(user));
+}
+
+function AuthProbe() {
+  const { authError, authStatus, currentUser, login, logout } = useSession();
+  const [message, setMessage] = useState("");
+
+  return (
+    <div>
+      <span data-testid="auth-status">{authStatus}</span>
+      <span data-testid="auth-user">{currentUser?.fullName ?? "No user"}</span>
+      <span data-testid="auth-error">{authError || message}</span>
+      <button
+        type="button"
+        onClick={() => {
+          void login({ username: "staff@example.com", password: "Staff123!" }).catch((error: unknown) => {
+            setMessage(error instanceof Error ? error.message : "Login failed.");
+          });
+        }}
+      >
+        Backend login
+      </button>
+      <button type="button" onClick={() => { void logout(); }}>Logout</button>
+    </div>
+  );
+}
+
+describe("backend auth session", () => {
+  it("stores backend tokens and user after login, then clears them on logout", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/auth/login/")) {
+        return new Response(JSON.stringify({
+          access: "access-token",
+          refresh: "refresh-token",
+          accessToken: "access-token",
+          refreshToken: "refresh-token",
+          mustChangePassword: false,
+          user: { ...testStaffUser, id: 2 },
+        }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      if (url.endsWith("/api/auth/logout/")) {
+        return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" }, status: 200 });
+      }
+      return new Response(JSON.stringify({ detail: "Not found." }), { headers: { "Content-Type": "application/json" }, status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SessionProvider validateStoredSession={false}>
+        <AuthProbe />
+      </SessionProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Backend login" }));
+    await screen.findByText("Olivia Frontdesk");
+
+    expect(window.localStorage.getItem(authAccessTokenStorageKey)).toBe("access-token");
+    expect(window.localStorage.getItem(authRefreshTokenStorageKey)).toBe("refresh-token");
+    expect(JSON.parse(window.localStorage.getItem(authUserStorageKey) ?? "{}").id).toBe("2");
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/auth/login/"), expect.any(Object));
+
+    await user.click(screen.getByRole("button", { name: "Logout" }));
+    await screen.findByText("No user");
+
+    expect(window.localStorage.getItem(authAccessTokenStorageKey)).toBeNull();
+    expect(window.localStorage.getItem(authRefreshTokenStorageKey)).toBeNull();
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/auth/logout/"), expect.any(Object));
+  });
+
+  it("clears stored auth state when /auth/me rejects the token", async () => {
+    seedAuthSession();
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify({ detail: "Authentication is required." }), {
+        headers: { "Content-Type": "application/json" },
+        status: 401,
+      }),
+    ));
+
+    render(
+      <SessionProvider>
+        <AuthProbe />
+      </SessionProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("auth-status")).toHaveTextContent("unauthenticated"));
+
+    expect(screen.getByTestId("auth-error")).toHaveTextContent("Authentication is required.");
+    expect(window.localStorage.getItem(authAccessTokenStorageKey)).toBeNull();
+    expect(window.localStorage.getItem(authUserStorageKey)).toBeNull();
+  });
 });
 
 describe("shared UI primitives", () => {
@@ -368,9 +478,10 @@ describe("detail drawer layout", () => {
 
   it("uses the wide shared staff detail drawer with compact tabs and contained leave content", async () => {
     const user = userEvent.setup();
+    seedAuthSession();
     render(
       <MemoryRouter>
-        <SessionProvider>
+        <SessionProvider validateStoredSession={false}>
           <StaffProfileDrawer
             staff={staff}
             open
@@ -400,9 +511,10 @@ describe("detail drawer layout", () => {
   });
 
   it("uses the same wide detail drawer pattern for patient records", () => {
+    seedAuthSession();
     render(
       <MemoryRouter>
-        <SessionProvider>
+        <SessionProvider validateStoredSession={false}>
           <PatientProfileDrawer patient={defaultPatient} open onClose={vi.fn()} />
         </SessionProvider>
       </MemoryRouter>,
@@ -416,11 +528,11 @@ describe("detail drawer layout", () => {
   });
 
   it("places staff profile leave exceptions under the schedule column", () => {
-    window.localStorage.setItem(demoSessionStorageKey, "Staff");
+    seedAuthSession();
 
     render(
       <MemoryRouter>
-        <SessionProvider>
+        <SessionProvider validateStoredSession={false}>
           <SettingsPage />
         </SessionProvider>
       </MemoryRouter>,

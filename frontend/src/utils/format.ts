@@ -19,12 +19,18 @@ export const currency = (amount: number) =>
     maximumFractionDigits: 0,
   }).format(amount);
 
-export const prettyDate = (value: string) =>
-  new Intl.DateTimeFormat("en-US", {
+export const prettyDate = (value: string) => {
+  const date = new Date(value.includes("T") ? value : `${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
-  }).format(new Date(`${value}T00:00:00`));
+  }).format(date);
+};
 
 export const ageFromDate = (value: string, referenceDate = new Date()) => {
   const birthDate = new Date(`${value}T00:00:00`);

@@ -11,7 +11,7 @@ import { FilterPopover } from "../../components/ui/FilterPopover";
 import { Input } from "../../components/ui/Input";
 import { Select } from "../../components/ui/Select";
 import { StatCard } from "../../components/ui/StatCard";
-import { useSession } from "../../context/SessionContext";
+import { useCurrentUser } from "../../context/SessionContext";
 import { getPatientById, getStaffProfileById, getVisitById } from "../../data/adapters";
 import type { BackendInvoice } from "../../types/models";
 import { currency, fullPatientName, prettyDate } from "../../utils/format";
@@ -19,7 +19,7 @@ import { loadMockInvoices, saveMockInvoices } from "../../utils/mockClinicState"
 import { invoiceStatusTone } from "../../utils/statusStyles";
 
 export function BillingPage() {
-  const { currentUser } = useSession();
+  const currentUser = useCurrentUser();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("All");
   const [dateFilter, setDateFilter] = useState("");

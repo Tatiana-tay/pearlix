@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Stethoscope } from "lucide-react";
 import { Button } from "../../components/ui/Button";
@@ -6,7 +6,6 @@ import { Input } from "../../components/ui/Input";
 import { useSession } from "../../context/SessionContext";
 import { routes } from "../../routes";
 import type { Role } from "../../types/models";
-import { loadMockUsers } from "../../utils/mockClinicState";
 
 const dashboardByRole: Record<Role, string> = {
   Admin: routes.admin.dashboard,
@@ -16,11 +15,18 @@ const dashboardByRole: Record<Role, string> = {
 
 export function LoginPage() {
   const navigate = useNavigate();
-  const { demoUsers, loginAsRole, loginAsUser } = useSession();
+  const { authError, login } = useSession();
   const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const [credentials, setCredentials] = useState({ username: "", password: "" });
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  useEffect(() => {
+    if (authError) {
+      setMessage(authError);
+    }
+  }, [authError]);
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const username = credentials.username.trim().toLowerCase();
     const password = credentials.password;
@@ -30,37 +36,16 @@ export function LoginPage() {
       return;
     }
 
-    const user = loadMockUsers().find((item) =>
-      item.username.toLowerCase() === username || item.email.toLowerCase() === username,
-    );
-
-    if (!user || password !== "password") {
-      setMessage("Invalid mock credentials. Try a listed demo role or use password.");
-      return;
+    setMessage("");
+    setSubmitting(true);
+    try {
+      const user = await login({ username, password });
+      navigate(dashboardByRole[user.role], { replace: true });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to log in. Please try again.");
+    } finally {
+      setSubmitting(false);
     }
-
-    if (user.status !== "Active") {
-      setMessage("This account is inactive. Contact an administrator to reactivate access.");
-      return;
-    }
-
-    if (!dashboardByRole[user.role]) {
-      setMessage("This account has no dashboard permission in the mock RBAC setup.");
-      return;
-    }
-
-    if (user.mustChangePassword) {
-      setMessage("This account must change password before continuing. Use the reset password flow.");
-      return;
-    }
-
-    loginAsUser(user);
-    navigate(dashboardByRole[user.role]);
-  };
-
-  const loginAs = (role: Role) => {
-    const user = loginAsRole(role);
-    navigate(dashboardByRole[user.role]);
   };
 
   return (
@@ -77,7 +62,7 @@ export function LoginPage() {
         <Input
           label="Username or email"
           name="username"
-          placeholder="olivia.frontdesk"
+          placeholder="staff@example.com"
           autoComplete="username"
           required
           value={credentials.username}
@@ -100,17 +85,7 @@ export function LoginPage() {
           <Link className="text-link" to={routes.auth.forgotPassword}>Forgot password?</Link>
         </div>
         {message && <div className="notice-card">{message}</div>}
-        <Button type="submit">Login</Button>
-        <div className="auth-demo">
-          <span className="tiny">Demo access</span>
-          <div className="auth-demo-grid">
-            {demoUsers.map((demoUser) => (
-              <Button key={demoUser.role} type="button" variant="secondary" onClick={() => loginAs(demoUser.role)}>
-                Login as {demoUser.label}
-              </Button>
-            ))}
-          </div>
-        </div>
+        <Button type="submit" disabled={submitting}>{submitting ? "Signing in..." : "Login"}</Button>
       </form>
     </main>
   );

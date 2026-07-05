@@ -13,7 +13,7 @@ import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { Select } from "../../components/ui/Select";
 import { Textarea } from "../../components/ui/Textarea";
 import { TimeInput } from "../../components/ui/TimeInput";
-import { useSession } from "../../context/SessionContext";
+import { useCurrentUser } from "../../context/SessionContext";
 import { getPatientById, getStaffProfileById } from "../../data/adapters";
 import type {
   AppointmentChangeLog,
@@ -64,7 +64,7 @@ const statusOptions: ("All" | AppointmentStatus)[] = [
 const rescheduleReasons: RescheduleReason[] = ["Doctor on leave", "Patient requested reschedule", "Clinic schedule adjustment", "Other"];
 
 export function AppointmentsPage() {
-  const { currentUser } = useSession();
+  const currentUser = useCurrentUser();
   const [appointmentRows, setAppointmentRows] = useState<BackendAppointment[]>(loadMockAppointments);
   const [availabilityExceptionRows] = useState<BackendAvailabilityException[]>(loadMockAvailabilityExceptions);
   const [changeLogRows, setChangeLogRows] = useState<BackendAppointmentChangeLog[]>(loadMockAppointmentChangeLogs);

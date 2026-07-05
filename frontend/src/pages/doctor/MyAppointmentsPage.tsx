@@ -10,7 +10,7 @@ import { Card } from "../../components/ui/Card";
 import { FilterPopover } from "../../components/ui/FilterPopover";
 import { Input } from "../../components/ui/Input";
 import { Select } from "../../components/ui/Select";
-import { useSession } from "../../context/SessionContext";
+import { useCurrentUser } from "../../context/SessionContext";
 import { getPatientById, patients } from "../../data/adapters";
 import { routes } from "../../routes";
 import type { AppointmentStatus, BackendAppointment, BackendPatient } from "../../types/models";
@@ -21,7 +21,7 @@ import { appointmentStatusTone } from "../../utils/statusStyles";
 
 export function MyAppointmentsPage() {
   const navigate = useNavigate();
-  const { currentUser } = useSession();
+  const currentUser = useCurrentUser();
   const [selectedAppointment, setSelectedAppointment] = useState<BackendAppointment | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");

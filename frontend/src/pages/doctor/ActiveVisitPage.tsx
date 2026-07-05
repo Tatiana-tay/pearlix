@@ -8,7 +8,7 @@ import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { Tabs } from "../../components/ui/Tabs";
 import { Textarea } from "../../components/ui/Textarea";
-import { useSession } from "../../context/SessionContext";
+import { useCurrentUser } from "../../context/SessionContext";
 import { getAIFindingsByAnalysisId } from "../../data/adapters";
 import type { BackendAIResult, BackendAppointment, BackendAttachment, BackendInvoice, BackendVisit } from "../../types/models";
 import { ageFromDate, fullPatientName, initials } from "../../utils/format";
@@ -32,7 +32,7 @@ const maxXrayBytes = 10 * 1024 * 1024;
 const acceptedXrayTypes = ["image/png", "image/jpeg", "application/dicom"];
 
 export function ActiveVisitPage() {
-  const { currentUser } = useSession();
+  const currentUser = useCurrentUser();
   const [activeTab, setActiveTab] = useState("notes");
   const [profileOpen, setProfileOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
